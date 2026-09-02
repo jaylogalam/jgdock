@@ -78,35 +78,58 @@ echo "==> Installing Hyprland snippet to $SNIPPET"
 install -Dm0644 "$ASSETS/omarchy-dock.lua" "$SNIPPET"
 
 # 5. Wire up Hyprland (best-effort) ----------------------------------------
-# The require() path differs between install kinds:
+# Two paths:
 #   * Per-user: `require("hypr.omarchy-dock")` (Omarchy's package.path resolves it)
-#   * System:   `require("hypr.omarchy-dock")` works only if /etc/hypr is on the
-#               path. On stock Omarchy it isn't, so we fall back to an absolute
-#               require() for system installs.
+#   * System:   `require("/etc/hypr/omarchy-dock")` absolute (no package.path entry)
+#
+# If hyprland.lua exists and the require isn't already there, append it.
+# Then attempt hyprctl reload if a Hyprland session is reachable.
 if [[ "$INSTALL_KIND" == "system" ]]; then
-    WIRE_LINE="require(\"$SNIPPET\")"
+    WIRE_LINE='require("/etc/hypr/omarchy-dock")'
 else
     WIRE_LINE='require("hypr.omarchy-dock")'
 fi
 
+MARKER='-- omarchy-dock: managed by install.sh; safe to delete if you uninstall.'
+
 if [[ -f "$USER_HYPR" ]]; then
-    if grep -F "$WIRE_LINE" "$USER_HYPR" >/dev/null 2>&1; then
-        echo "==> Hyprland config already wired"
+    # Detect by the marker comment, not the require string. Catches any
+    # whitespace variant of the require line, including manual edits.
+    if grep -F -- "$MARKER" "$USER_HYPR" >/dev/null 2>&1; then
+        echo "==> Hyprland config already wired (marker found)"
+        RELOAD_NEEDED=0
     else
-        echo
-        echo "==> To finish setup, add this line to $USER_HYPR"
-        echo "    (anywhere after the Omarchy requires):"
-        echo
+        # Append with a marker so future installs can detect and (if needed)
+        # remove the line, and so the user knows where it came from.
+        printf '\n%s\n%s\n' "$MARKER" "$WIRE_LINE" >> "$USER_HYPR"
+        echo "==> Appended to $USER_HYPR:"
         echo "    $WIRE_LINE"
-        echo
-        echo "    Then run: hyprctl reload"
+        RELOAD_NEEDED=1
     fi
 else
     echo
     echo "==> No $USER_HYPR found."
-    echo "    Once you create one, add this line to load the dock rules:"
+    echo "    Create one and add this line to load the dock rules:"
     echo
     echo "    $WIRE_LINE"
+    RELOAD_NEEDED=0
+fi
+
+# Reload only if we changed something AND Hyprland is reachable. A fresh
+# install on a machine without a running session shouldn't trigger anything.
+# Also check configerrors after reload: hyprctl reload doesn't validate Lua
+# syntax, so a bad edit can leave the session in an inconsistent state.
+if [[ "$RELOAD_NEEDED" -eq 1 ]] && command -v hyprctl >/dev/null 2>&1; then
+    if hyprctl reload >/dev/null 2>&1; then
+        echo "==> Hyprland reloaded"
+        errs=$(hyprctl configerrors 2>&1 || true)
+        if [[ -n "$errs" ]]; then
+            echo "==> WARNING: Hyprland reported config errors:"
+            echo "$errs" | sed 's/^/    /'
+        fi
+    else
+        echo "==> hyprctl reload failed (no active session?); reload manually after first login"
+    fi
 fi
 
 echo

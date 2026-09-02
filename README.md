@@ -8,46 +8,48 @@ mutex between siblings. A Lua snippet at `assets/omarchy-dock.lua` registers
 the window rules (float, pin, geometry) and keybindings; load it from your
 Hyprland config with one `require()` line.
 
-## Install (current machine)
+## Install
 
 ```sh
 cd ~/Projects/omarchy-dock
 ./install.sh
 ```
 
-Then add to `~/.config/hypr/hyprland.lua` (after the Omarchy requires):
-
-```lua
-require("hypr.omarchy-dock")
-```
-
-… and run `hyprctl reload`.
-
-(The installer prints this line for you and detects it on subsequent runs.)
-
-## Install (fresh machine)
-
-```sh
-git clone <this repo> ~/Projects/omarchy-dock
-cd ~/Projects/omarchy-dock
-./install.sh
-```
-
-The script:
+The installer:
 
 1. Builds the binary with `cargo build --release`.
-2. Installs to `/usr/bin/omarchy-dock` (system) or `~/.local/bin/omarchy-dock`
+2. Installs to `/usr/bin/omarchy-dock` (system, root) or `~/.local/bin/omarchy-dock`
    (user); always also creates the symlink at `~/.local/bin/omarchy-dock`.
 3. Installs the packaged config to `/etc/omarchy/dock.toml` (system) or
    `~/.config/omarchy/dock.toml` (user); seeds the user location only if
    absent — your edits are preserved on re-install.
-4. Installs the Hyprland snippet to `/etc/hypr/omarchy-dock.lua` (system) or
+4. Installs the Hyprland snippet at `/etc/hypr/omarchy-dock.lua` (system) or
    `~/.config/hypr/omarchy-dock.lua` (user).
-5. Prints the `require()` line you need to add (system) or detects an
-   already-present line (per-user, since `~/.config/hypr/` is on Omarchy's
-   `package.path` by default).
+5. If `~/.config/hypr/hyprland.lua` exists and isn't already wired, appends
+   `require("hypr.omarchy-dock")` (per-user) or
+   `require("/etc/hypr/omarchy-dock")` (system) with a marker comment.
+6. If a Hyprland session is reachable, runs `hyprctl reload` and verifies
+   `configerrors` is clean. Skipped if there's no running session (e.g.,
+   fresh install before first login).
 
-Idempotent — re-run any time.
+Idempotent — re-run any time. Re-running detects the marker comment and
+won't duplicate the require line.
+
+
+## Uninstall
+
+Remove the marker comment block from `~/.config/hypr/hyprland.lua`, then
+remove the package files:
+
+```sh
+rm -f ~/.local/bin/omarchy-dock \
+      ~/.config/hypr/omarchy-dock.lua \
+      ~/.config/omarchy/dock.toml
+hyprctl reload
+```
+
+(For system installs: `/usr/bin/omarchy-dock`, `/etc/hypr/omarchy-dock.lua`,
+`/etc/omarchy/dock.toml`, with `sudo`.)
 
 ## Why `require("hypr.omarchy-dock")` works
 
