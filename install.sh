@@ -187,28 +187,28 @@ do_uninstall() {
     fi
 
     # 4. Remove the Hyprland snippet.
-    if [[ -f "$HYPR_DIR/jgdock.lua" ]]; then
-        rm -f "$HYPR_DIR/jgdock.lua"
-        echo "==> Removed $HYPR_DIR/jgdock.lua"
-        removed=1
-    fi
+    # if [[ -f "$HYPR_DIR/jgdock.lua" ]]; then
+    #     rm -f "$HYPR_DIR/jgdock.lua"
+    #     echo "==> Removed $HYPR_DIR/jgdock.lua"
+    #     removed=1
+    # fi
 
     # 5. Optionally remove the user config. Default config (installed but
     # never edited) is safe to remove without prompting; for safety we
     # always prompt — the user may have hand-edited it.
-    if [[ -f "$user_cfg" ]]; then
-        echo
-        printf "Remove user config at %s? [y/N] " "$user_cfg"
-        local ans
-        read -r ans
-        if [[ "$ans" =~ ^[Yy]$ ]]; then
-            rm -f "$user_cfg"
-            echo "==> Removed $user_cfg"
-            removed=1
-        else
-            echo "==> Keeping $user_cfg"
-        fi
-    fi
+    # if [[ -f "$user_cfg" ]]; then
+    #     echo
+    #     printf "Remove user config at %s? [y/N] " "$user_cfg"
+    #     local ans
+    #     read -r ans
+    #     if [[ "$ans" =~ ^[Yy]$ ]]; then
+    #         rm -f "$user_cfg"
+    #         echo "==> Removed $user_cfg"
+    #         removed=1
+    #     else
+    #         echo "==> Keeping $user_cfg"
+    #     fi
+    # fi
 
     # 6. Reload Hyprland if it's reachable.
     if command -v hyprctl >/dev/null 2>&1; then
