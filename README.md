@@ -35,8 +35,8 @@ The installer:
 2. Installs to `/usr/bin/jgdock` (system, root) or
    `~/.local/bin/jgdock` (user); always also creates the symlink at
    `~/.local/bin/jgdock`.
-3. Installs the packaged config to `/etc/omarchy/dock.toml` (system) or
-   `~/.config/omarchy/dock.toml` (user); seeds the user location only if
+3. Installs the packaged config to `/etc/jgdock/dock.toml` (system) or
+   `~/.config/jgdock/dock.toml` (user); seeds the user location only if
    absent — your edits are preserved on re-install.
 4. Installs the Hyprland snippet at `/etc/hypr/jgdock.lua` (system) or
    `~/.config/hypr/jgdock.lua` (user).
@@ -61,7 +61,7 @@ This removes:
 - The binary (`~/.local/bin/jgdock` and `/usr/bin/jgdock`)
 - The Hyprland snippet (`~/.config/hypr/jgdock.lua` or `/etc/hypr/`)
 - The `require()` line + marker comment in `hyprland.lua`
-- The user config at `~/.config/omarchy/dock.toml` — **prompted** first; if
+- The user config at `~/.config/jgdock/dock.toml` — **prompted** first; if
   you've hand-edited it, answer `n` to keep it
 
 Then runs `hyprctl reload` and verifies `configerrors` is clean.
@@ -130,7 +130,7 @@ omarchy-dock/
 
 ## Adding a dock
 
-1. Add a `[docks.<name>]` block to `~/.config/omarchy/dock.toml`:
+1. Add a `[docks.<name>]` block to `~/.config/jgdock/dock.toml`:
 
    ```toml
    [docks.btop]

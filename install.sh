@@ -4,7 +4,7 @@
 # Builds from source and installs:
 #   * Binary at $BIN_DIR/jgdock (system /usr/bin or user ~/.local/bin)
 #   * Symlink at ~/.local/bin/jgdock pointing at the binary
-#   * Default config at $CFG_DIR/omarchy/dock.toml (skipped if user already has one)
+#   * Default config at $CFG_DIR/jgdock/dock.toml (skipped if user already has one)
 #   * Hyprland snippet at $CFG_DIR/hypr/jgdock.lua (user) or /etc/hypr/ (system)
 #
 # Subcommands:
@@ -112,7 +112,7 @@ do_uninstall() {
         HYPR_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
     fi
     local user_bin="${XDG_BIN_HOME:-$HOME/.local/bin}"
-    local user_cfg="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/dock.toml"
+    local user_cfg="${XDG_CONFIG_HOME:-$HOME/.config}/jgdock/dock.toml"
     local user_hypr="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprland.lua"
 
     local removed=0
@@ -225,7 +225,7 @@ do_install() {
     fi
 
     local user_bin="${XDG_BIN_HOME:-$HOME/.local/bin}"
-    local user_cfg="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/dock.toml"
+    local user_cfg="${XDG_CONFIG_HOME:-$HOME/.config}/jgdock/dock.toml"
     local user_hypr="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprland.lua"
     local reload_needed=0
 
@@ -254,7 +254,7 @@ do_install() {
     # 3. Default config -----------------------------------------------------
     # Install a default at the system location (or per-user), and seed the
     # user's config dir only if absent. User edits win on re-install.
-    local system_cfg="$CFG_DIR/omarchy/dock.toml"
+    local system_cfg="$CFG_DIR/jgdock/dock.toml"
     echo "==> Installing default config to $system_cfg"
     install -Dm0644 "$ASSETS/dock.toml" "$system_cfg"
 

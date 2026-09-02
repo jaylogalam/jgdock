@@ -3,19 +3,8 @@ use crate::hypr;
 use anyhow::{Context, Result};
 use std::process::Command;
 
-extern "C" {
-    fn setsid() -> i32;
-}
-
-fn libc_setsid() {
-    unsafe { setsid(); }
-}
-
 #[derive(Debug)]
 pub enum Op {
-    Show,
-    Hide,
-    Toggle,
     Spawn,
 }
 
@@ -24,10 +13,7 @@ pub enum Op {
 pub fn execute(cfg: &Config, name: &str, op: Op) -> Result<()> {
     let spec = &cfg.docks[name];
     match op {
-        Op::Spawn  => spawn_if_missing(spec),
-        Op::Show   => show(cfg, name),
-        Op::Hide   => hide(spec),
-        Op::Toggle => toggle(cfg, name),
+        Op::Spawn => spawn_if_missing(spec),
     }
 }
 
@@ -142,25 +128,13 @@ fn spawn_if_missing(spec: &DockSpec) -> Result<()> {
     if hypr::first_match(&clients, &spec.class).is_some() {
         return Ok(());
     }
-    // Shell-split the command. This handles `setsid env -C "$HOME/Work" ...`
-    // and similar without invoking a shell. Quoted paths aren't supported
-    // (config commands must avoid whitespace in tokens).
-    let parts: Vec<&str> = spec.command.split_whitespace().collect();
-    if parts.is_empty() {
-        return Ok(());
-    }
-    let mut cmd = Command::new(parts[0]);
-    for arg in &parts[1..] {
-        cmd.arg(arg);
-    }
-    // Detach from controlling terminal so the dock survives script exit.
-    unsafe {
-        use std::os::unix::process::CommandExt;
-        cmd.pre_exec(|| {
-            libc_setsid();
-            Ok(())
-        });
-    }
+    // Run the command through a real shell so $HOME, env -C "$HOME/Work",
+    // and other quoted forms work. We don't need to parse anything here;
+    // the shell does it. Detach via setsid so the dock survives script exit.
+    // The shell-out is preserved for protocol parity with the bash version —
+    // a future optimization could execve directly with parsed argv.
+    let mut cmd = Command::new("bash");
+    cmd.arg("-c").arg(format!("setsid {} </dev/null >/dev/null 2>&1 &", spec.command));
     cmd.stdin(std::process::Stdio::null());
     cmd.stdout(std::process::Stdio::null());
     cmd.stderr(std::process::Stdio::null());

@@ -35,7 +35,7 @@ fn config_path() -> std::path::PathBuf {
         return std::path::PathBuf::from(p);
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    std::path::PathBuf::from(home).join(".config/omarchy/dock.toml")
+    std::path::PathBuf::from(home).join(".config/jgdock/dock.toml")
 }
 
 fn run() -> Result<()> {

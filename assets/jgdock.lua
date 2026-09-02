@@ -17,7 +17,7 @@
 
 -- Window rules ------------------------------------------------------------
 -- Runtime behaviour (spawn, show/hide, mutex) lives in `jgdock`,
--- configured in ~/.config/omarchy/dock.toml. This block is geometry only.
+-- configured in ~/.config/jgdock/dock.toml. This block is geometry only.
 
 o.window({ class = "^Omp$" }, {
     float = true,
