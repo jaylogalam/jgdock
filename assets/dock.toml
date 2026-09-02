@@ -1,0 +1,37 @@
+# omarchy-dock configuration.
+#
+# Source of truth for runtime dock behaviour. Window rules (float / pin /
+# size / move) are mirrored in ~/.config/hypr/hyprland.lua because Hyprland
+# evaluates the geometry expressions natively — keep both in sync when adding
+# or changing a dock.
+#
+# Each [docks.<name>] block is one dockable app. Fields:
+#   class    - WM_CLASS to match (string, exact)
+#   command  - shell command to spawn when the dock is first requested
+#   stash    - special workspace name to hide the dock on
+#   slot     - logical slot label: left | right | center | full (free-form)
+#   mutex    - list of dock names to auto-hide when this dock is shown
+#              (so only one of the group is visible at a time)
+#
+# Geometry (size / move) belongs in window rules; the runtime only needs
+# class / command / stash / slot / mutex.
+
+[docks.omp]
+class   = "Omp"
+command = "setsid env -C \"$HOME/Work\" kitty --class Omp -e omp"
+stash   = "special:omp"
+slot    = "right"
+mutex   = ["oterm"]
+
+[docks.oterm]
+class   = "Oterm"
+command = "setsid kitty --class Oterm"
+stash   = "special:oterm"
+slot    = "right"
+mutex   = ["omp"]
+
+[docks.telegram]
+class   = "org.telegram.desktop"
+command = "setsid Telegram"
+stash   = "special:telegram"
+slot    = "left"
