@@ -52,18 +52,25 @@ won't duplicate the require line.
 
 ## Uninstall
 
-Remove the marker comment block from `~/.config/hypr/hyprland.lua`, then
-remove the package files:
-
 ```sh
-rm -f ~/.local/bin/jsg-custom-dock \
-      ~/.config/hypr/jsg-custom-dock.lua \
-      ~/.config/omarchy/dock.toml
-hyprctl reload
+./install.sh uninstall
 ```
 
-(For system installs: `/usr/bin/jsg-custom-dock`,
-`/etc/hypr/jsg-custom-dock.lua`, `/etc/omarchy/dock.toml`, with `sudo`.)
+This removes:
+
+- The binary (`~/.local/bin/jsg-custom-dock` and `/usr/bin/jsg-custom-dock`)
+- The Hyprland snippet (`~/.config/hypr/jsg-custom-dock.lua` or `/etc/hypr/`)
+- The `require()` line + marker comment in `hyprland.lua`
+- The user config at `~/.config/omarchy/dock.toml` — **prompted** first; if
+  you've hand-edited it, answer `n` to keep it
+
+Then runs `hyprctl reload` and verifies `configerrors` is clean.
+
+The script does **not** delete:
+
+- The source directory (`~/Projects/omarchy-dock/`) — printed at the end
+  so you can `rm -rf` it if you want
+- The cargo registry cache (`~/.cargo/`) — shared with other Rust projects
 
 ## Why `require("hypr.jsg-custom-dock")` works
 

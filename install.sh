@@ -12,6 +12,10 @@
 #   update             git fetch + fast-forward merge, then build + install.
 #                      Use this on devices that already have the repo cloned
 #                      to pick up changes pushed to the remote.
+#   uninstall          Remove the binary, symlink, Hyprland snippet, and
+#                      the require line from hyprland.lua. Prompts before
+#                      removing the user config. Does NOT delete the source
+#                      directory or cargo registry.
 #
 # Idempotent: re-running is safe. Existing user config is never overwritten.
 set -euo pipefail
@@ -23,9 +27,11 @@ CMD="${1:-install}"
 
 usage() {
     cat <<EOF
-usage: $0 [install|update]
-  install  Build + install from local source (default).
-  update   Fast-forward merge from origin, then build + install.
+usage: $0 [install|update|uninstall]
+  install    Build + install from local source (default).
+  update     Fast-forward merge from origin, then build + install.
+  uninstall  Remove binary, symlink, snippet, and require line. Prompts
+             before removing the user config; source dir is left alone.
 EOF
     exit 2
 }
@@ -88,6 +94,118 @@ do_update() {
     fi
 
     echo "==> Updated $(git -C "$REPO_ROOT" rev-parse --short "$local_sha") -> $(git -C "$REPO_ROOT" rev-parse --short HEAD)"
+}
+
+# ---------------------------------------------------------------------------
+# uninstall: remove the binary, symlink, Hyprland snippet, and the require
+# line from hyprland.lua. Asks before touching the user config (which may
+# contain hand-edited dock specs). Leaves the source directory and cargo
+# registry cache alone — those are not ours to delete.
+do_uninstall() {
+    if [[ $EUID -eq 0 ]]; then
+        BIN_DIR="/usr/bin"
+        CFG_DIR="/etc"
+        HYPR_DIR="/etc/hypr"
+    else
+        BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
+        CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
+        HYPR_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
+    fi
+    local user_bin="${XDG_BIN_HOME:-$HOME/.local/bin}"
+    local user_cfg="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/dock.toml"
+    local user_hypr="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprland.lua"
+
+    local removed=0
+
+    # 1. Strip the marker + require line from hyprland.lua (if present).
+    local marker="-- $PKG: managed by install.sh; safe to delete if you uninstall."
+    if [[ -f "$user_hypr" ]] && grep -F -- "$marker" "$user_hypr" >/dev/null 2>&1; then
+        local tmp="${user_hypr}.jsg-custom-dock.uninst.$$"
+        # awk drops the marker line and the require line that follows it.
+        if awk -v m="$marker" '
+            $0 == m { skip = 1; next }
+            skip == 1 { skip = 0; next }
+            { print }
+        ' "$user_hypr" > "$tmp"; then
+            # Trim trailing blanks the removal may have created.
+            local trimmed
+            trimmed=$(awk '
+                { lines[NR] = $0 }
+                END {
+                    last = NR
+                    while (last > 0 && lines[last] ~ /^[[:space:]]*$/) last--
+                    for (i = 1; i <= last; i++) print lines[i]
+                }
+            ' "$tmp")
+            printf '%s\n' "$trimmed" > "$tmp"
+            mv "$tmp" "$user_hypr"
+            echo "==> Removed require line from $user_hypr"
+            removed=1
+        else
+            rm -f "$tmp"
+            echo "warning: failed to strip require line from $user_hypr" >&2
+        fi
+    fi
+
+    # 2. Remove the binary (system path).
+    if [[ -e "$BIN_DIR/$PKG" ]]; then
+        rm -f "$BIN_DIR/$PKG"
+        echo "==> Removed $BIN_DIR/$PKG"
+        removed=1
+    fi
+
+    # 3. Remove the symlink (user path), if it's a symlink.
+    if [[ -L "$user_bin/$PKG" ]]; then
+        rm -f "$user_bin/$PKG"
+        echo "==> Removed symlink $user_bin/$PKG"
+        removed=1
+    fi
+
+    # 4. Remove the Hyprland snippet.
+    if [[ -f "$HYPR_DIR/jsg-custom-dock.lua" ]]; then
+        rm -f "$HYPR_DIR/jsg-custom-dock.lua"
+        echo "==> Removed $HYPR_DIR/jsg-custom-dock.lua"
+        removed=1
+    fi
+
+    # 5. Optionally remove the user config. Default config (installed but
+    # never edited) is safe to remove without prompting; for safety we
+    # always prompt — the user may have hand-edited it.
+    if [[ -f "$user_cfg" ]]; then
+        echo
+        printf "Remove user config at %s? [y/N] " "$user_cfg"
+        local ans
+        read -r ans
+        if [[ "$ans" =~ ^[Yy]$ ]]; then
+            rm -f "$user_cfg"
+            echo "==> Removed $user_cfg"
+            removed=1
+        else
+            echo "==> Keeping $user_cfg"
+        fi
+    fi
+
+    # 6. Reload Hyprland if it's reachable.
+    if command -v hyprctl >/dev/null 2>&1; then
+        if hyprctl reload >/dev/null 2>&1; then
+            echo "==> Hyprland reloaded"
+            local errs
+            errs=$(hyprctl configerrors 2>&1 || true)
+            if [[ -n "$errs" ]]; then
+                echo "==> WARNING: Hyprland reported config errors:"
+                echo "$errs" | sed 's/^/    /'
+            fi
+        fi
+    fi
+
+    if [[ "$removed" -eq 0 ]]; then
+        echo "==> Nothing to remove (already uninstalled?)"
+    else
+        echo
+        echo "==> Done. Source directory left in place: $REPO_ROOT"
+        echo "    Remove it manually if you no longer need it:"
+        echo "      rm -rf '$REPO_ROOT'"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -222,7 +340,8 @@ do_install() {
 
 # Dispatch ------------------------------------------------------------------
 case "$CMD" in
-    install) do_install ;;
-    update)  do_update; do_install ;;
-    *)       usage ;;
+    install)   do_install ;;
+    update)    do_update; do_install ;;
+    uninstall) do_uninstall ;;
+    *)         usage ;;
 esac
