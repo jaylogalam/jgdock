@@ -3,15 +3,14 @@
 #
 # Builds from source and installs:
 #   - Binary at ~/.local/bin/jgdock
-#   - Default config at ~/.config/jgdock/dock.toml (skipped if user has one)
-#   - Hyprland snippet at ~/.config/jgdock/jgdock.lua (+ windowrules.lua,
-#     bindings.lua side files), loaded via require("jgdock") after a
-#     package.path prepend written into hyprland.lua
+#   - Default config at ~/.config/jgdock/dock.toml (skipped if user has one;
+#     legacy [docks.*] files are backed up and replaced with [slots.*])
+#   - Hyprland snippet at ~/.config/jgdock/jgdock.lua (and bindings.lua,
+#     loaded via require("jgdock") after a package.path prepend written
+#     into hyprland.lua)
 #
-# Refuses to run as root: there's no system install mode. Running as root
-# would write to /usr/bin /etc and produce a config the same user couldn't
-# uninstall cleanly. Run as the user who will own the binary.
-#
+# jgdock is window-based: there are no per-app window rules. The runtime
+# owns geometry; the snippet only registers keybindings.
 # Subcommands:
 #   install (default)  Build + install from local source.
 #   update             git fetch + fast-forward merge, then build + install.
@@ -185,6 +184,13 @@ do_uninstall() {
         removed=1
     fi
 
+    # 3. Remove the legacy windowrules.lua left behind by older installs.
+    if [[ -e "$SNIPPET_RULES" ]]; then
+        rm -f "$SNIPPET_RULES"
+        echo "==> Removed legacy $SNIPPET_RULES"
+        removed=1
+    fi
+
     # 4. Reload Hyprland if it's reachable.
     if command -v hyprctl >/dev/null 2>&1; then
         if hyprctl reload >/dev/null 2>&1; then
@@ -229,25 +235,40 @@ do_install() {
     install -Dm0755 "$REPO_ROOT/target/release/$PKG" "$BIN_DIR/$PKG"
 
     # 3. Default config -----------------------------------------------------
-    # Seed the user's config dir only if absent. User edits win on re-install.
+    # Seed the user's config dir only if absent OR if the existing file uses
+    # the legacy `[docks.<name>]` shape (window-based config no longer
+    # recognises that table). User edits win when the file is already on the
+    # current shape; legacy files are backed up next to themselves so a
+    # rollback path exists.
     if [[ ! -e "$USER_CFG" ]]; then
         echo "==> Seeding user config at $USER_CFG"
         mkdir -p "$(dirname "$USER_CFG")"
         install -Dm0644 "$ASSETS/dock.toml" "$USER_CFG"
+    elif grep -E '^\[docks\.' "$USER_CFG" >/dev/null 2>&1; then
+        local stamp bak
+        stamp=$(date +%Y%m%d%H%M%S)
+        bak="${USER_CFG}.pre-slot.bak.${stamp}"
+        mv "$USER_CFG" "$bak"
+        echo "==> Backed up legacy docks config to $bak"
+        install -Dm0644 "$ASSETS/dock.toml" "$USER_CFG"
+        echo "==> Seeded slot-based config at $USER_CFG"
     else
         echo "==> User config already exists; leaving $USER_CFG alone"
     fi
 
     # 4. Hyprland snippet ---------------------------------------------------
-    # jgdock.lua requires windowrules.lua and bindings.lua, so all
-    # three must land together.
+    # jgdock.lua requires bindings.lua; both land together.
     mkdir -p "$HYPR_DIR"
     echo "==> Installing snippet to $SNIPPET"
     install -Dm0644 "$ASSETS/jgdock.lua" "$SNIPPET"
-    echo "==> Installing rules to $SNIPPET_RULES"
-    install -Dm0644 "$ASSETS/windowrules.lua" "$SNIPPET_RULES"
     echo "==> Installing bindings to $SNIPPET_BINDINGS"
     install -Dm0644 "$ASSETS/bindings.lua" "$SNIPPET_BINDINGS"
+    # Drop the legacy windowrules.lua file left behind by older installs:
+    # window rules were per-app and are now owned by the runtime.
+    if [[ -e "$SNIPPET_RULES" && ! -L "$SNIPPET_RULES" ]]; then
+        rm -f "$SNIPPET_RULES"
+        echo "==> Removed legacy windowrules.lua"
+    fi
 
     # 5. Wire up Hyprland (best-effort) -------------------------------------
     # Per-user only: prepend $XDG_CONFIG_HOME/jgdock/?.lua to package.path

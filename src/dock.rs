@@ -1,145 +1,185 @@
-use crate::config::{Config, DockSpec};
+use crate::config::{Config, SlotSpec};
 use crate::hypr;
-use anyhow::{Context, Result};
-use std::process::Command;
+use crate::state::State;
+use anyhow::{anyhow, Result};
+use std::path::Path;
+use std::time::Duration;
 
-#[derive(Debug)]
-pub enum Op {
-    Spawn,
-}
+/// Settle time after a single Hyprland dispatcher call. Most dispatchers
+/// return `ok` before the compositor applies the state change — a
+/// follow-up dispatcher targeting the same window can race the in-flight
+/// update and silently fail. 500ms is empirically required on Hyprland
+/// 0.56.x; shorter values (200ms, 80ms) intermittently lost the float,
+/// resize, move, or pin step. Used between every dispatcher pair.
+const DISPATCH_SETTLE: Duration = Duration::from_millis(500);
 
-/// Execute a dock operation. The caller has already resolved `name` against
-/// the config.
-pub fn execute(cfg: &Config, name: &str, op: Op) -> Result<()> {
-    let spec = &cfg.docks[name];
-    match op {
-        Op::Spawn => spawn_if_missing(spec),
-    }
-}
+/// Settle time after a workspace switch (especially `special:` →
+/// regular). 1500ms is empirically required to make `move_to_workspace`
+/// from a special workspace settle before subsequent position
+/// dispatchers fire; shorter windows let Hyprland silently lose focus
+/// on the moved window and the float/resize/move/pin chain ends up
+/// targeting the wrong window.
+const WORKSPACE_SETTLE: Duration = Duration::from_millis(1500);
 
-pub fn show(cfg: &Config, name: &str) -> Result<()> {
-    let spec = &cfg.docks[name];
-    spawn_if_missing(spec)?;
-    hide_mutex(cfg, name)?;
+/// Bind the currently-focused window to `slot`: float + resize + move +
+/// pin + focus, then record the binding in the runtime state file.
+///
+/// Steps:
+///   1. Resolve the focused window's address.
+///   2. Drop any prior binding this slot had (unpin if the previous
+///      occupant is still around).
+///   3. Move the window onto the active workspace and re-focus.
+///   4. Make it floating (and wait for the state to settle).
+///   5. Resize + move it into the slot's geometry.
+///   6. Pin it.
+///   7. Persist `slot -> address`.
+pub fn dock(cfg: &Config, slot: &str, state_path: &Path) -> Result<()> {
+    let spec = &cfg.slots[slot];
+    let address = hypr::focused_address()?
+        .ok_or_else(|| anyhow!("no focused window to dock"))?;
 
-    let clients = hypr::list_clients()?;
-    let cur_id  = hypr::active_workspace_id()?;
+    let mut state = State::load(state_path);
+    release_existing(&state, slot, &address);
+    state.bind(slot, &address);
 
-    if let Some(client) = hypr::first_match(&clients, &spec.class) {
-        let on_stash = client.workspace.name == spec.stash;
-        if !on_stash && client.pinned {
-            // Already shown: just refocus.
-            hypr::dispatch_focus(&client.address)?;
-            return Ok(());
-        }
-        hypr::dispatch_move(&client.address, &cur_id.to_string(), false)?;
-        hypr::dispatch_pin(&client.address)?;
-        hypr::dispatch_focus(&client.address)?;
-    }
+    let cur_id = hypr::active_workspace_id()?;
+    // Focus first: position-mode dispatchers (`move`, `resize`) operate
+    // on the active window and ignore any `window` field on Hyprland
+    // 0.56.x. Re-focusing is also needed after `move_to_workspace`,
+    // which drops focus on the moved window.
+    hypr::focus(&address)?;
+    std::thread::sleep(DISPATCH_SETTLE);
+    hypr::move_to_workspace(&address, &cur_id.to_string(), false)?;
+    std::thread::sleep(WORKSPACE_SETTLE);
+    hypr::focus(&address)?;
+    std::thread::sleep(DISPATCH_SETTLE);
+    hypr::float_enable(&address)?;
+    std::thread::sleep(DISPATCH_SETTLE);
+    apply_geometry(&address, spec)?;
+    hypr::pin(&address)?;
+    state.save(state_path)?;
     Ok(())
 }
 
-pub fn hide(spec: &DockSpec) -> Result<()> {
+/// Unpin the focused window. Keeps its current workspace and clears any
+/// recorded binding for it (if it's the bound window for some slot). No-op
+/// if the focused window is not pinned or there is no focused window.
+pub fn undock(state_path: &Path) -> Result<()> {
+    let Some(address) = hypr::focused_address()? else {
+        return Ok(());
+    };
     let clients = hypr::list_clients()?;
-    if let Some(client) = hypr::first_match(&clients, &spec.class) {
-        // Idempotent: only dispatch if state actually changes.
-        if client.pinned {
-            hypr::dispatch_pin(&client.address)?;
-        }
-        if client.workspace.name != spec.stash {
-            hypr::dispatch_move(&client.address, &spec.stash, false)?;
+    let mut state = State::load(state_path);
+
+    if let Some(c) = clients.iter().find(|c| c.address == address) {
+        if c.pinned {
+            hypr::unpin(&address)?;
         }
     }
+    // Drop any slot binding that points at this address.
+    let bound_to: Vec<String> = state.slots.iter()
+        .filter_map(|(s, a)| (a == &address).then(|| s.clone()))
+        .collect();
+    for s in bound_to {
+        state.clear(&s);
+    }
+    state.save(state_path)?;
     Ok(())
 }
 
-pub fn toggle(cfg: &Config, name: &str) -> Result<()> {
-    let spec = &cfg.docks[name];
+/// Show or hide the slot's bound window based on its current state.
+///
+/// State is in two places:
+///   * The runtime state file maps `slot -> window_address`.
+///   * Hyprland tells us whether that window still exists and whether it's
+///     currently pinned.
+///
+/// `dock` happens when there is no bound window yet (or the bound window
+/// has been closed). Otherwise we flip the bound window's visibility.
+pub fn toggle(cfg: &Config, slot: &str, state_path: &Path) -> Result<()> {
+    let spec = &cfg.slots[slot];
+    let mut state = State::load(state_path);
     let clients = hypr::list_clients()?;
-    let cur_id  = hypr::active_workspace_id()?;
 
-    let Some(client) = hypr::first_match(&clients, &spec.class) else {
-        // No window yet: spawn + show.
-        return show(cfg, name);
+    let Some(address) = state.slots.get(slot).cloned() else {
+        return dock(cfg, slot, state_path);
+    };
+    let Some(occ) = clients.iter().find(|c| c.address == address).cloned() else {
+        // Bound window is gone — drop the stale binding and dock whatever
+        // is currently focused.
+        state.clear(slot);
+        state.save(state_path)?;
+        return dock(cfg, slot, state_path);
     };
 
-    let on_stash = client.workspace.name == spec.stash;
-    let on_current_special = client.workspace.name == format!("special:{}", cur_id);
-
-    if !on_stash && client.pinned && !on_current_special {
-        // Shown on a real workspace -> hide.
-        hide(spec)
+    if occ.pinned {
+        hide_address(&occ.address, &spec.stash)?;
     } else {
-        // Stashed, on another workspace, or on a "special:N" workspace
-        // whose name happens to mirror the active id.
-        show(cfg, name)
+        hypr::focus(&occ.address)?;
+        std::thread::sleep(DISPATCH_SETTLE);
+        let cur_id = hypr::active_workspace_id()?;
+        hypr::move_to_workspace(&occ.address, &cur_id.to_string(), false)?;
+        std::thread::sleep(WORKSPACE_SETTLE);
+        show_address(&occ.address, spec)?;
     }
+    Ok(())
 }
 
-/// Cycle: hide whatever dock is currently pinned in `slot`, then show the
-/// next one in config order. Wraps.
-pub fn cycle(cfg: &Config, slot: &str) -> Result<()> {
-    let order: Vec<&str> = cfg.docks
-        .iter()
-        .filter(|(_, s)| s.slot == slot)
-        .map(|(n, _)| n.as_str())
-        .collect();
-    if order.is_empty() {
-        anyhow::bail!("no docks in slot: {}", slot);
-    }
-
+/// Send a window to its stash and unpin it. Idempotent. Re-focuses the
+/// window between unpin and move because `hl.dsp.window.pin(..., unset)`
+/// drops focus on Hyprland 0.56.x; subsequent `move_to_workspace`
+/// dispatchers target the active window, not the one we asked for.
+fn hide_address(address: &str, stash: &str) -> Result<()> {
     let clients = hypr::list_clients()?;
-    let current_idx = order.iter().position(|n| {
-        let class = &cfg.docks[*n].class;
-        hypr::first_match(&clients, class).is_some_and(|c| c.pinned)
-    });
-
-    if let Some(i) = current_idx {
-        let cur_name = order[i];
-        hide(&cfg.docks[cur_name])?;
-    }
-    let next_name = order[current_idx.map_or(0, |i| (i + 1) % order.len())];
-    show(cfg, next_name)
-}
-
-fn hide_mutex(cfg: &Config, name: &str) -> Result<()> {
-    let partners: Vec<String> = cfg.docks[name].mutex.clone();
-    if partners.is_empty() {
-        return Ok(());
-    }
-    let clients = hypr::list_clients()?;
-    for other in &partners {
-        let Some(other_spec) = cfg.docks.get(other) else { continue };
-        if let Some(client) = hypr::first_match(&clients, &other_spec.class) {
-            if !client.pinned {
-                continue;
-            }
-            hypr::dispatch_pin(&client.address)?;
-            if client.workspace.name != other_spec.stash {
-                hypr::dispatch_move(&client.address, &other_spec.stash, false)?;
-            }
+    if let Some(c) = clients.iter().find(|c| c.address == address) {
+        if c.pinned {
+            hypr::unpin(address)?;
+            std::thread::sleep(DISPATCH_SETTLE);
+            hypr::focus(address)?;
+            std::thread::sleep(DISPATCH_SETTLE);
+        }
+        if c.workspace.name != stash {
+            hypr::move_to_workspace(address, stash, false)?;
         }
     }
     Ok(())
 }
 
-fn spawn_if_missing(spec: &DockSpec) -> Result<()> {
-    let clients = hypr::list_clients()?;
-    if hypr::first_match(&clients, &spec.class).is_some() {
-        return Ok(());
-    }
-    // Run the command through a real shell so $HOME, env -C "$HOME/Work",
-    // and other quoted forms work. We don't need to parse anything here;
-    // the shell does it. Detach via setsid so the dock survives script exit.
-    // The shell-out is preserved for protocol parity with the bash version —
-    // a future optimization could execve directly with parsed argv.
-    let mut cmd = Command::new("bash");
-    cmd.arg("-c").arg(format!("setsid {} </dev/null >/dev/null 2>&1 &", spec.command));
-    cmd.stdin(std::process::Stdio::null());
-    cmd.stdout(std::process::Stdio::null());
-    cmd.stderr(std::process::Stdio::null());
-    let _child = cmd.spawn().context("spawning dock command")?;
-    // Give Hyprland a beat to register the new window before callers query.
-    std::thread::sleep(std::time::Duration::from_millis(150));
+/// Float + resize + move + pin. Used by `toggle` to redisplay a
+/// previously-bound window that has since moved or resized. The caller is
+/// expected to have already moved the window to the active workspace and
+/// waited `WORKSPACE_SETTLE` so focus on the moved window has settled.
+fn show_address(address: &str, spec: &SlotSpec) -> Result<()> {
+    hypr::focus(address)?;
+    std::thread::sleep(DISPATCH_SETTLE);
+    hypr::float_enable(address)?;
+    std::thread::sleep(DISPATCH_SETTLE);
+    apply_geometry(address, spec)?;
+    hypr::pin(address)?;
     Ok(())
+}
+
+fn apply_geometry(address: &str, spec: &SlotSpec) -> Result<()> {
+    hypr::resize(address, spec.width, spec.height)?;
+    std::thread::sleep(DISPATCH_SETTLE);
+    hypr::move_abs(address, spec.x, spec.y)?;
+    std::thread::sleep(DISPATCH_SETTLE);
+    Ok(())
+}
+
+/// If `slot` already binds to a different live window, unpin that window
+/// so it doesn't shadow the new occupant. Best-effort: pin state is
+/// queried via Hyprland; a missing or already-hidden binding is fine.
+fn release_existing(state: &State, slot: &str, new_address: &str) {
+    let Some(prev) = state.slots.get(slot) else { return };
+    if prev == new_address {
+        return;
+    }
+    let Ok(clients) = hypr::list_clients() else { return };
+    let Some(c) = clients.iter().find(|c| c.address == *prev) else {
+        return;
+    };
+    if c.pinned {
+        let _ = hypr::unpin(prev);
+    }
 }

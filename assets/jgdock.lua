@@ -9,17 +9,12 @@
 --
 -- The installer wires this up automatically with a marker comment so it
 -- can be undone by ./install.sh uninstall. Manual installation works too
--- — copy this file (plus jgdock-rules.lua and jgdock-bindings.lua) to
--- ~/.config/jgdock/ and add the three lines above.
+-- — copy this file (plus bindings.lua) to ~/.config/jgdock/ and add the
+-- three lines above.
 --
--- This loader requires the two side files, each of which can be edited
--- independently:
---   * jgdock-rules.lua    window rules (float, pin, geometry)
---   * jgdock-bindings.lua keybindings
---
--- It registers:
---   * Window rules for the configured docks
---   * Keybindings for SUPER+T (oterm), SUPER+G (omp), SUPER+ALT+E (telegram)
+-- jgdock is window-based: there are no per-app window rules. The runtime
+-- owns geometry (it queries dock.toml for slot positions and applies them
+-- at dock-time). This loader only registers keybindings; edit bindings.lua
+-- to add or change them.
 
-require("windowrules")
 require("bindings")

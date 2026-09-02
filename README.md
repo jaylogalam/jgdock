@@ -1,12 +1,44 @@
 # jgdock
 
-Config-driven dock manager for Hyprland on Omarchy (or any Arch/Hyprland box).
+Slot-based dock manager for Hyprland on Omarchy (or any Arch/Hyprland box).
 
-Each dockable app (omp, oterm, telegram, ...) is one `[docks.<name>]` block in
-`assets/dock.toml`. The Rust binary at `src/` handles spawn, show/hide, stash,
-mutex between siblings. A Lua snippet at `assets/jgdock.lua` registers
-the window rules (float, pin, geometry) and keybindings; load it from your
-Hyprland config with one `require()` line.
+A dock is a slot — a rectangle on the screen with a name (`left`, `right`,
+`center`, `full`, ...). Any focused window can be docked into any slot.
+Once docked, `toggle <slot>` shows or hides that same window. There are no
+app rules in the binary, no per-app TOML blocks, and no per-app Lua
+window-rules.
+
+```
+                     jgdock
+                       │
+              ┌────────┴────────┐
+              │                 │
+          SLOT CONFIG       RUNTIME STATE
+       (dock.toml)        (state.toml)
+              │                 │
+       left/right/etc.      slot → window address
+              │                 │
+              └────────┬────────┘
+                       │
+                currently focused
+                     window
+```
+
+Workflow:
+
+```text
+Open any app
+     ↓
+Focus it
+     ↓
+SUPER + SHIFT + RIGHT         (or: jgdock dock right)
+     ↓
+App becomes the right dock
+```
+
+After that, `SUPER + RIGHT` (or `jgdock toggle right`) shows/hides the
+right dock. The slot doesn't care whether the bound window is OMP, Oterm,
+Telegram, Kitty, or Firefox — it's a window address.
 
 ## Install
 
@@ -18,38 +50,36 @@ cd ~/Projects/jgdock
 
 ## Update (other devices)
 
-On a machine that already has the repo cloned:
-
 ```sh
 cd ~/Projects/jgdock
 ./install.sh update
 ```
 
-This fetches from `origin`, fast-forward merges, and rebuilds + reinstalls.
-Refuses to run if there are local uncommitted changes or if the branch has
-diverged (resolve manually with `git pull --rebase` first).
+Fetches from `origin`, fast-forwards, and rebuilds + reinstalls. Refuses
+if local changes are uncommitted or if the branch has diverged (resolve
+manually with `git pull --rebase` first).
 
 The installer:
 
 1. Builds the binary with `cargo build --release`.
 2. Installs the binary to `~/.local/bin/jgdock`.
-3. Installs the packaged config to `~/.config/jgdock/dock.toml`; seeds the
-   user location only if absent — your edits are preserved on re-install.
-4. Installs the Hyprland snippet at `~/.config/jgdock/jgdock.lua` (co-located
-   with `dock.toml`). The loader requires `jgdock-rules.lua` (window rules)
-   and `jgdock-bindings.lua` (keybindings); all three land together.
-5. If `~/.config/hypr/hyprland.lua` exists, appends a marker + wire block:
-   a 2-line `package.path` prepend + `require("jgdock")`. Migrates older
-   `require("hypr.jgdock")` blocks from a previous install automatically.
-6. If a Hyprland session is reachable, runs `hyprctl reload` and verifies
-   `configerrors` is clean. Skipped if there's no running session (e.g.,
-   fresh install before first login).
+3. Installs the packaged config to `~/.config/jgdock/dock.toml`; seeds
+   the user location only if absent. If an existing file uses the legacy
+   `[docks.<name>]` shape, it's moved aside (`dock.toml.pre-slot.bak.*`)
+   and the new slot-based config is seeded. Existing slot-based configs
+   are left alone.
+4. Installs the Hyprland snippet at `~/.config/jgdock/jgdock.lua`
+   (co-located with `dock.toml`). The loader requires `bindings.lua`;
+   both land together.
+5. Drops any legacy `windowrules.lua` left behind by older installs.
+6. If `~/.config/hypr/hyprland.lua` exists, appends a marker + wire
+   block: a 2-line `package.path` prepend + `require("jgdock")`.
+7. If a Hyprland session is reachable, runs `hyprctl reload` and
+   verifies `configerrors` is clean. Skipped if there's no running
+   session.
 
 User-only: refuses to run as root. There's no system install mode; copy
-the repo to a user-owned path and run `./install.sh` there.
-
-Idempotent — re-run any time. Re-running detects the marker + first wire
-line and won't duplicate the wire block.
+the repo to a user-owned path and run `./install.sh` there. Idempotent.
 
 ## Uninstall
 
@@ -57,22 +87,23 @@ line and won't duplicate the wire block.
 ./install.sh uninstall
 ```
 
-This removes:
+Removes:
 
-- The binary (`~/.local/bin/jgdock`)
+- The binary (`~/.local/bin/jgdock`).
 - The Hyprland snippet (`~/.config/jgdock/jgdock.lua`,
-  `jgdock-rules.lua`, `jgdock-bindings.lua`)
-- The wire block + marker comment in `hyprland.lua` (the 2-line
-  `package.path` prepend + `require("jgdock")`)
-- The user config at `~/.config/jgdock/dock.toml` — **prompted** first; if
+  `bindings.lua`).
+- Any legacy `windowrules.lua` from a previous version.
+- The wire block + marker comment in `hyprland.lua`.
 
 Then runs `hyprctl reload` and verifies `configerrors` is clean.
 
-The script does **not** delete:
+Does **not** delete:
 
-- The source directory (`~/Projects/jgdock/`) — printed at the end
-  so you can `rm -rf` it if you want
-- The cargo registry cache (`~/.cargo/`) — shared with other Rust projects
+- The source directory (`~/Projects/jgdock/`).
+- The user config (`~/.config/jgdock/dock.toml`) — left in place; user
+  edits win.
+- The runtime state file (`~/.local/state/jgdock/state.toml`) — slot
+  bindings.
 
 ## How `require("jgdock")` resolves
 
@@ -101,21 +132,24 @@ the existing block by its marker comment and skips the append.
 ## Usage
 
 ```sh
-jgdock ls                # list configured docks
-jgdock show   <name>     # show dock (spawn if absent)
-jgdock hide   <name>     # hide to stash
-jgdock toggle <name>     # show/hide based on state
-jgdock spawn  <name>     # spawn only, don't touch state
-jgdock next   <slot>     # cycle docks in slot
+jgdock ls                  # list configured slots
+jgdock dock   <slot>       # pin the focused window into slot geometry
+jgdock undock              # unpin the focused window (clears its binding)
+jgdock toggle <slot>       # show slot's window if hidden, hide if shown
 ```
 
-Default keybindings (defined in `assets/jgdock.lua`):
+Default keybindings (defined in `assets/bindings.lua`):
 
-| Key              | Action         |
-|------------------|----------------|
-| `SUPER + T`      | Toggle oterm   |
-| `SUPER + G`      | Toggle omp     |
-| `SUPER + ALT + E`| Toggle telegram |
+| Key                       | Action         |
+|---------------------------|----------------|
+| `SUPER + RIGHT`           | Toggle right   |
+| `SUPER + SHIFT + RIGHT`   | Dock to right  |
+| `SUPER + LEFT`            | Toggle left    |
+| `SUPER + SHIFT + LEFT`    | Dock to left   |
+| `SUPER + U`               | Undock focused |
+
+`center` and `full` slots are not bound by default — uncomment them in
+`bindings.lua` if you use those slots.
 
 ## Layout
 
@@ -125,58 +159,69 @@ jgdock/
 ├── Cargo.lock
 ├── src/
 │   ├── main.rs       # CLI dispatch (clap)
-│   ├── config.rs     # dock.toml parser (serde + toml)
+│   ├── config.rs     # dock.toml parser (serde + toml, with arithmetic
+│   │                 #   expression evaluator for monitor-relative
+│   │                 #   dimensions)
 │   ├── hypr.rs       # hyprctl IPC wrapper
-│   └── dock.rs       # state machine (show/hide/toggle/cycle)
+│   ├── state.rs      # slot -> window-address state file
+│   └── dock.rs       # dock / undock / toggle (state-driven)
 ├── assets/
-│   ├── dock.toml             # default config (3 docks: omp, oterm, telegram)
-│   ├── jgdock.lua            # top-level loader: requires rules + bindings
-│   ├── jgdock-rules.lua      # window rules (float, pin, geometry)
-│   └── jgdock-bindings.lua   # keybindings
+│   ├── dock.toml             # default config (4 slots: right/left/center/full)
+│   ├── jgdock.lua            # top-level loader: requires bindings.lua
+│   └── bindings.lua         # keybindings
 ├── install.sh        # builds + installs everything
 └── README.md
 ```
 
-## Adding a dock
+## Configuration
 
-1. Add a `[docks.<name>]` block to `~/.config/jgdock/dock.toml`:
+`~/.config/jgdock/dock.toml` defines slots. Each slot is a generic
+position; it has no notion of which app fills it.
 
-   ```toml
-   [docks.btop]
-   class   = "Btop"
-   command = "kitty --class Btop -e btop"
-   stash   = "special:btop"
-   slot    = "left"
-   mutex   = ["telegram"]   # auto-hide telegram when showing btop
-   ```
+```toml
+[slots.right]
+x       = "monitor_w*2/3"   # right-third start
+y       = 27
+width   = "monitor_w/3-1"
+height  = "monitor_h-28"
 
-2. Add a window rule to `assets/jgdock-rules.lua` (geometry: size + position):
+[slots.left]
+x       = 0
+y       = 27
+width   = "monitor_w/3-1"
+height  = "monitor_h-28"
+```
 
-   ```lua
-   o.window({ class = "^Btop$" }, {
-       float = true,
-       pin = true,
-       size = { "(monitor_w/3-1)", "(monitor_h-28)" },
-       move = { "0", "27" },
-   })
-   ```
+Geometry axes accept either raw pixel integers (`y = 27`) or Hyprland
+monitor-arithmetic expressions as strings (`width = "monitor_w/3-1"`).
+The parser supports `+ - *`, integer `/` and `%`, unary minus,
+parentheses, and the identifiers `monitor_w` / `monitor_h`. Anything
+Hyprland itself understands is allowed; the parser evaluates against the
+focused monitor's pixel dimensions at load time.
 
-3. (Optional) add a keybinding in `assets/jgdock-bindings.lua`:
+`stash` is the special workspace used to hide the slot's window when
+it's toggled off. It defaults to `special:<slot_name>`. Each slot needs
+its own stash — slots that share a stash will fight over who owns the
+window.
 
-   ```lua
-   o.bind("SUPER + B", "Toggle btop", "jgdock toggle btop")
-   ```
+## Adding a slot
 
-4. Rebuild: `cd ~/Projects/jgdock && ./install.sh` (or `./install.sh update`
-   if you changed things on another machine and want to pull them). The cargo
-   build overwrites only the binary; assets are copied fresh on every install.
+Add a `[slots.<name>]` block to `~/.config/jgdock/dock.toml`. Add a
+matching pair of bindings in `assets/bindings.lua`. Then
+`./install.sh install` (or `./install.sh update` to pick up changes
+from another machine) — the cargo build overwrites only the binary;
+config edits in your `~/.config/jgdock/dock.toml` are preserved.
+
+There is no app entry to add. The dock takes whatever window is focused
+when you press the dock shortcut.
 
 ## Why Rust
 
 Bash + jq + python3 worked, but the boolean/string mismatch in pin
-idempotency bit us during smoke testing. Rust catches that class of bug at
-compile time. The binary is also ~3× faster to start (~40 ms vs ~120 ms),
-which matters for keybind latency if you ever chain multiple docks.
+idempotency bit us during smoke testing. Rust catches that class of bug
+at compile time. The binary is also ~3× faster to start (~40 ms vs
+~120 ms), which matters for keybind latency if you ever chain multiple
+docks.
 
 The shell-out to `hyprctl` is preserved for protocol parity — a future
 optimization could talk the Hyprland IPC socket directly.
@@ -184,5 +229,5 @@ optimization could talk the Hyprland IPC socket directly.
 ## Upstream
 
 Source lives only in `~/Projects/jgdock/`. The runtime files (binary,
-config, snippet) are installed under `~/.local/` and `~/.config/` and are
-excluded by this repo's gitignore.
+config, snippet, state) are installed under `~/.local/` and
+`~/.config/` and are excluded by this repo's gitignore.

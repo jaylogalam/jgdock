@@ -1,37 +1,44 @@
 # jgdock configuration.
 #
-# Source of truth for runtime dock behaviour. Window rules (float / pin /
-# size / move) are mirrored in ~/.config/hypr/hyprland.lua because Hyprland
-# evaluates the geometry expressions natively — keep both in sync when adding
-# or changing a dock.
+# jgdock is a window-based dock manager. Each `[slots.<name>]` block defines
+# a generic dock position (geometry + a stash workspace). Any focused window
+# can be docked into any slot via:
 #
-# Each [docks.<name>] block is one dockable app. Fields:
-#   class    - WM_CLASS to match (string, exact)
-#   command  - shell command to spawn when the dock is first requested
-#   stash    - special workspace name to hide the dock on
-#   slot     - logical slot label: left | right | center | full (free-form)
-#   mutex    - list of dock names to auto-hide when this dock is shown
-#              (so only one of the group is visible at a time)
+#   jgdock dock   <slot>     # pin the focused window into slot geometry
+#   jgdock undock            # unpin the focused window
+#   jgdock toggle <slot>     # show slot's window if hidden, hide if shown
+#   jgdock ls                # list configured slots
 #
-# Geometry (size / move) belongs in window rules; the runtime only needs
-# class / command / stash / slot / mutex.
+# Geometry axes accept either raw pixel integers (e.g. `y = 27`) or Hyprland
+# monitor-arithmetic expressions as strings (e.g. `width = "monitor_w/3-1"`).
+# Anything that Hyprland's `dispatcher` evaluates is allowed.
+#
+# Each slot's `stash` is the special workspace used both as the window's
+# "hidden" home and as the slot's registry: the window currently sitting on
+# `<stash>` IS the slot's bound window. Defaults to `special:<slot_name>` when
+# omitted. Set `stash = ""` to disable the registry (toggle won't find the
+# prior occupant, but dock/undock still work).
 
-[docks.omp]
-class   = "Omp"
-command = "setsid env -C \"$HOME/Work\" kitty --class Omp -e omp"
-stash   = "special:omp"
-slot    = "right"
-mutex   = ["oterm"]
+[slots.right]
+x       = "monitor_w*2/3"
+y       = 27
+width   = "monitor_w/3-1"
+height  = "monitor_h-28"
 
-[docks.oterm]
-class   = "Oterm"
-command = "setsid kitty --class Oterm"
-stash   = "special:oterm"
-slot    = "right"
-mutex   = ["omp"]
+[slots.left]
+x       = 0
+y       = 27
+width   = "monitor_w/3-1"
+height  = "monitor_h-28"
 
-[docks.telegram]
-class   = "org.telegram.desktop"
-command = "setsid Telegram"
-stash   = "special:telegram"
-slot    = "left"
+[slots.center]
+x       = "monitor_w/3"
+y       = 27
+width   = "monitor_w/3-1"
+height  = "monitor_h-28"
+
+[slots.full]
+x       = 0
+y       = 27
+width   = "monitor_w-2"
+height  = "monitor_h-28"

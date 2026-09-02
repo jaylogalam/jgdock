@@ -5,8 +5,8 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize, Clone)]
 pub struct Client {
     pub address  : String,
-    pub class    : String,
     pub pinned   : bool,
+    pub floating: bool,
     pub workspace: Workspace,
 }
 
@@ -50,26 +50,96 @@ pub fn active_workspace_id() -> Result<i64> {
     Ok(ws.id)
 }
 
-/// Hyprland 0.56.2's `hl.dsp.window.pin({ state = true|false })` ignores the
-/// `state` argument and always toggles. We dispatch unconditionally; the
-/// idempotency check above ensures we only call this on transitions.
-pub fn dispatch_pin(address: &str) -> Result<()> {
+/// Return the focused window's address, or `None` if no window is focused.
+pub fn focused_address() -> Result<Option<String>> {
+    let out = std::process::Command::new("hyprctl")
+        .args(["activewindow", "-j"])
+        .output()
+        .context("spawning hyprctl activewindow -j")?;
+    if !out.status.success() {
+        return Err(anyhow!(
+            "hyprctl activewindow -j failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    // activewindow prints `{}` (empty object) when no window is focused; treat
+    // that as None instead of a parse error.
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .or_else(|_| serde_json::from_slice(&out.stderr))
+        .context("parsing hyprctl activewindow -j output")?;
+    Ok(v.get("address").and_then(|a| a.as_str()).map(|s| s.to_string()))
+}
+
+/// All low-level dispatchers go through `hl.dispatch(...)`. Hyprland's Lua
+/// parser expects table literals, so the helpers below format them inline.
+///
+/// Window-targeting dispatchers all take `{ window = "address:<hex>" }`.
+
+pub fn pin(address: &str) -> Result<()> {
     dispatch(&format!(
         "hl.dsp.window.pin({{ window = \"address:{}\" }})",
         address
     ))
 }
 
-pub fn dispatch_move(address: &str, workspace: &str, follow: bool) -> Result<()> {
-    // Always quote the workspace: identifiers like `special:foo` confuse
-    // Hyprland's Lua parser without quotes.
+pub fn unpin(address: &str) -> Result<()> {
+    dispatch(&format!(
+        "hl.dsp.window.pin({{ window = \"address:{}\", action = \"unset\" }})",
+        address
+    ))
+}
+
+/// Ensure the window is floating.
+///
+/// `hl.dsp.window.float` `action` values 0–3 all toggle the float state
+/// on Hyprland 0.56.x — there is no "force set" value. Calling it on an
+/// already-floating window would tile it, which breaks the `toggle` show
+/// path (the stashed window was already floating, so re-issuing the
+/// dispatcher tiled it, and the subsequent `pin` was rejected with
+/// "Window does not qualify to be pinned"). Skip the call when the
+/// window is already floating.
+pub fn float_enable(address: &str) -> Result<()> {
+    let already = list_clients()?
+        .iter()
+        .find(|c| c.address == address)
+        .map(|c| c.floating)
+        .unwrap_or(false);
+    if !already {
+        dispatch(&format!(
+            "hl.dsp.window.float({{ window = \"address:{}\", action = 0 }})",
+            address
+        ))?;
+    }
+    Ok(())
+}
+
+/// Move a window to a named workspace. `follow` switches focus to the new ws.
+pub fn move_to_workspace(address: &str, workspace: &str, follow: bool) -> Result<()> {
     dispatch(&format!(
         "hl.dsp.window.move({{ window = \"address:{}\", workspace = \"{}\", follow = {} }})",
         address, workspace, follow,
     ))
 }
 
-pub fn dispatch_focus(address: &str) -> Result<()> {
+/// Position a window at (x, y). Coordinates are forwarded verbatim to
+/// Position a window at (x, y). Coordinates are pre-resolved pixel integers
+/// (the config layer evaluates `monitor_w/3-1` etc. before we get here).
+pub fn move_abs(address: &str, x: i64, y: i64) -> Result<()> {
+    dispatch(&format!(
+        "hl.dsp.window.move({{ window = \"address:{}\", x = {}, y = {} }})",
+        address, x, y,
+    ))
+}
+
+/// Resize a window to (w, h). Same pixel-integer contract as `move_abs`.
+pub fn resize(address: &str, w: i64, h: i64) -> Result<()> {
+    dispatch(&format!(
+        "hl.dsp.window.resize({{ window = \"address:{}\", x = {}, y = {} }})",
+        address, w, h,
+    ))
+}
+
+pub fn focus(address: &str) -> Result<()> {
     dispatch(&format!(
         "hl.dsp.focus({{ window = \"address:{}\" }})",
         address
@@ -77,21 +147,12 @@ pub fn dispatch_focus(address: &str) -> Result<()> {
 }
 
 fn dispatch(spec: &str) -> Result<()> {
-    let out = std::process::Command::new("hyprctl")
+    let status = std::process::Command::new("hyprctl")
         .args(["dispatch", spec])
-        .output()
+        .status()
         .with_context(|| format!("spawning hyprctl dispatch {}", spec))?;
-    if !out.status.success() {
-        return Err(anyhow!(
-            "hyprctl dispatch `{}` failed: {}",
-            spec,
-            String::from_utf8_lossy(&out.stderr)
-        ));
+    if !status.success() {
+        return Err(anyhow!("hyprctl dispatch `{}` failed", spec));
     }
     Ok(())
-}
-
-/// Find the first client matching `class`. Returns `None` if absent.
-pub fn first_match<'a>(clients: &'a [Client], class: &str) -> Option<&'a Client> {
-    clients.iter().find(|c| c.class == class)
 }

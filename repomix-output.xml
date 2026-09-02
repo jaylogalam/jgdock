@@ -1,0 +1,1566 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+assets/
+  bindings.lua
+  dock.toml
+  jgdock.lua
+src/
+  config.rs
+  dock.rs
+  hypr.rs
+  main.rs
+  state.rs
+.gitignore
+Cargo.toml
+install.sh
+README.md
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="src/state.rs">
+//! Runtime slot state — which window is bound to which slot.
+//!
+//! Distinct from `Config`, which only knows geometry + stash names. State is
+//! written under `$XDG_STATE_HOME/jgdock/state.toml` (default
+//! `~/.local/state/jgdock/state.toml`) and survives across calls so that
+//! `toggle <slot>` can find a previously docked window after it's been
+//! re-hidden or the user has changed focus.
+//!
+//! A missing or unreadable state file is treated as empty — the runtime
+//! tolerates first-run, permission issues, and corruption by starting from
+//! a clean slate and overwriting on the next mutation. That keeps `jgdock`
+//! runnable in degraded environments (no write access to $HOME, etc.)
+//! without blocking the user.
+
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+/// slot name → Hyprland window address (`0x...`).
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct State {
+    #[serde(default)]
+    pub slots: BTreeMap<String, String>,
+}
+
+impl State {
+    /// Read the state file, or return an empty `State` if absent/unreadable.
+    /// Corruption logs to stderr via `eprintln!` and degrades to empty —
+    /// losing the binding is less harmful than refusing to launch.
+    pub fn load(path: &Path) -> Self {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return Self::default();
+        };
+        match toml::from_str::<Self>(&text) {
+            Ok(s)  => s,
+            Err(e) => {
+                eprintln!(
+                    "jgdock: state file at {} failed to parse ({}); starting empty",
+                    path.display(), e,
+                );
+                Self::default()
+            }
+        }
+    }
+
+    /// Persist atomically: write to a sibling `.tmp` and `rename` over the
+    /// target so a crash mid-write doesn't leave a half-written TOML that
+    /// would force the next call to clear the bindings.
+    pub fn save(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating state dir {}", parent.display()))?;
+        }
+        let body = toml::to_string(self).context("serialising jgdock state")?;
+        let tmp = path.with_extension("toml.tmp");
+        std::fs::write(&tmp, body)
+            .with_context(|| format!("writing {}", tmp.display()))?;
+        std::fs::rename(&tmp, path)
+            .with_context(|| format!("renaming {} -> {}", tmp.display(), path.display()))?;
+        Ok(())
+    }
+
+    pub fn bind(&mut self, slot: &str, address: &str) {
+        self.slots.insert(slot.to_string(), address.to_string());
+    }
+
+    pub fn clear(&mut self, slot: &str) {
+        self.slots.remove(slot);
+    }
+}
+
+/// Default location: `$XDG_STATE_HOME/jgdock/state.toml`, falling back to
+/// `$HOME/.local/state/jgdock/state.toml`.
+pub fn default_path() -> PathBuf {
+    let base = std::env::var("XDG_STATE_HOME")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".local/state"))
+        })
+        .unwrap_or_else(|| PathBuf::from(".local/state"));
+    base.join("jgdock").join("state.toml")
+}
+</file>
+
+<file path="assets/bindings.lua">
+-- jgdock keybindings.
+--
+-- Each slot defined in dock.toml gets two bindings:
+--
+--   SUPER + <direction>          toggle   — show if hidden, hide if shown
+--   SUPER + SHIFT + <direction>  dock     — pin the focused window into the slot
+--
+-- The right/left bindings cover the two most common slots; center/full are
+-- included for completeness but uncomment if you use them. Drop or rename
+-- freely — the binary doesn't care about specific names, only that the
+-- slot is defined in dock.toml.
+--
+-- `jgdock undock` removes a binding from any slot (whichever one owns the
+-- focused window). It's exposed under SUPER + U as an escape hatch when a
+-- dock gets stuck.
+
+o.bind("SUPER + RIGHT",          "Toggle right dock",  "jgdock toggle right")
+o.bind("SUPER + SHIFT + RIGHT",  "Dock to right",      "jgdock dock right")
+
+o.bind("SUPER + LEFT",           "Toggle left dock",   "jgdock toggle left")
+o.bind("SUPER + SHIFT + LEFT",   "Dock to left",       "jgdock dock left")
+
+o.bind("SUPER + U",              "Undock focused",     "jgdock undock")
+
+-- Optional: center and full slots. Uncomment if you've defined them in
+-- dock.toml; the bindings do nothing without a matching slot entry.
+-- o.bind("SUPER + C",              "Toggle center",      "jgdock toggle center")
+-- o.bind("SUPER + SHIFT + C",      "Dock to center",     "jgdock dock center")
+-- o.bind("SUPER + F",              "Toggle full",        "jgdock toggle full")
+-- o.bind("SUPER + SHIFT + F",      "Dock to full",       "jgdock dock full")
+</file>
+
+<file path="src/config.rs">
+use anyhow::{anyhow, bail, Context, Result};
+use serde::Deserialize;
+use std::collections::BTreeMap;
+use std::path::Path;
+
+/// Hyprland-monitor arithmetic expression, evaluated at load time against
+/// the active monitor's dimensions into a concrete pixel integer. Examples:
+///
+///   * `0`, `27`                       → raw pixels
+///   * `"monitor_w/3-1"`               → current monitor width / 3 - 1
+///   * `"monitor_h-28"`                → current monitor height - 28
+///   * `"monitor_w*2/3"`               → start of right third on a 3-column layout
+///
+/// We support integers, the identifiers `monitor_w` / `monitor_h`, the
+/// operators `+ - *`, integer `/` and `%` (floor division), unary minus, and
+/// parentheses. That's enough for every example used in the default slots
+/// without pulling in a full expression-evaluator crate.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum Dim {
+    Px(i64),
+    Expr(String),
+}
+
+/// Resolved slot spec with pixel-integer geometry. `Dim::Expr` is evaluated
+/// once at config load against the active monitor and converted to
+/// `Dim::Px`. The runtime only ever sees integers.
+#[derive(Debug, Clone)]
+pub struct SlotSpec {
+    pub x     : i64,
+    pub y     : i64,
+    pub width : i64,
+    pub height: i64,
+    pub stash : String,
+}
+
+#[derive(Debug)]
+pub struct Config {
+    pub slots: BTreeMap<String, SlotSpec>,
+    /// Monitor dimensions used to resolve expressions. Kept around so we can
+    /// recompute when the user changes monitors between calls. For now we
+    /// capture once at load.
+    pub monitor_w: i64,
+    pub monitor_h: i64,
+}
+
+/// Active monitor size from `hyprctl monitors -j`. Returns the first focused
+/// monitor's logical width/height.
+pub fn active_monitor_size() -> Result<(i64, i64)> {
+    let out = std::process::Command::new("hyprctl")
+        .args(["monitors", "-j"])
+        .output()
+        .context("spawning hyprctl monitors -j")?;
+    if !out.status.success() {
+        return Err(anyhow!(
+            "hyprctl monitors -j failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .or_else(|_| serde_json::from_slice(&out.stderr))
+        .context("parsing hyprctl monitors -j output")?;
+    let monitors = v.as_array()
+        .ok_or_else(|| anyhow!("hyprctl monitors -j: expected JSON array"))?;
+    let focused = monitors.iter()
+        .find(|m| m.get("focused").and_then(|f| f.as_bool()).unwrap_or(false))
+        .or_else(|| monitors.first())
+        .ok_or_else(|| anyhow!("no monitors reported by Hyprland"))?;
+    let w = focused.get("width").and_then(|w| w.as_i64())
+        .ok_or_else(|| anyhow!("monitor width missing or non-integer"))?;
+    let h = focused.get("height").and_then(|h| h.as_i64())
+        .ok_or_else(|| anyhow!("monitor height missing or non-integer"))?;
+    Ok((w, h))
+}
+
+impl Config {
+    pub fn load(path: &Path) -> Result<Self> {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        let raw: RawConfig = toml::from_str(&text)
+            .with_context(|| format!("parsing {}", path.display()))?;
+        if raw.slots.is_empty() {
+            return Err(anyhow!("no [slots.*] blocks defined"));
+        }
+        let (monitor_w, monitor_h) = active_monitor_size()?;
+
+        let mut slots: BTreeMap<String, SlotSpec> = BTreeMap::new();
+        for (name, raw_spec) in raw.slots {
+            let stash = if raw_spec.stash.is_empty() {
+                format!("special:{}", name)
+            } else if !raw_spec.stash.starts_with("special:") {
+                return Err(anyhow!(
+                    "slots.{}: stash must be a special workspace (start with `special:`, got `{}`)",
+                    name, raw_spec.stash
+                ));
+            } else {
+                raw_spec.stash.clone()
+            };
+            let x      = resolve_dim("x",      &name, &raw_spec.x,      monitor_w, monitor_h)?;
+            let y      = resolve_dim("y",      &name, &raw_spec.y,      monitor_w, monitor_h)?;
+            let width  = resolve_dim("width",  &name, &raw_spec.width,  monitor_w, monitor_h)?;
+            let height = resolve_dim("height", &name, &raw_spec.height, monitor_w, monitor_h)?;
+            slots.insert(name, SlotSpec { x, y, width, height, stash });
+        }
+        Ok(Config { slots, monitor_w, monitor_h })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RawConfig {
+    slots: BTreeMap<String, RawSlot>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawSlot {
+    x: Dim,
+    y: Dim,
+    width: Dim,
+    height: Dim,
+    #[serde(default)]
+    stash: String,
+}
+
+fn resolve_dim(axis: &str, slot: &str, dim: &Dim, mw: i64, mh: i64) -> Result<i64> {
+    let v = match dim {
+        Dim::Px(n) => *n,
+        Dim::Expr(s) => ExprParser::new(s, mw, mh)
+            .eval()
+            .with_context(|| format!("slots.{}.{}: invalid expression `{}`", slot, axis, s))?,
+    };
+    if v < 0 {
+        bail!("slots.{}.{}: expression resolved to negative value ({})", slot, axis, v);
+    }
+    Ok(v)
+}
+
+// ---------------------------------------------------------------------------
+// Tiny Hyprland-style expression evaluator.
+//
+// Grammar:
+//   expr     = term (('+' | '-') term)*
+//   term     = factor (('*' | '/' | '%') factor)*
+//   factor   = '-' factor | atom
+//   atom     = number | ident | '(' expr ')'
+//   number   = digit+
+//   ident    = 'monitor_w' | 'monitor_h'
+//
+// All arithmetic is i64. `/` is integer division toward zero (Rust default).
+// `%` follows the same rule.
+// ---------------------------------------------------------------------------
+
+struct ExprParser<'a> {
+    src: &'a [u8],
+    pos: usize,
+    mw : i64,
+    mh : i64,
+}
+
+impl<'a> ExprParser<'a> {
+    fn new(src: &'a str, mw: i64, mh: i64) -> Self {
+        Self { src: src.as_bytes(), pos: 0, mw, mh }
+    }
+
+    fn eval(&mut self) -> Result<i64> {
+        self.skip_ws();
+        let v = self.parse_expr()?;
+        self.skip_ws();
+        if self.pos < self.src.len() {
+            bail!("unexpected character `{}`", self.src[self.pos] as char);
+        }
+        Ok(v)
+    }
+
+    fn parse_expr(&mut self) -> Result<i64> {
+        let mut v = self.parse_term()?;
+        loop {
+            self.skip_ws();
+                match self.peek() {
+                    Some(b'+') => { self.pos += 1; v += self.parse_term()?; }
+                    Some(b'-') => { self.pos += 1; v -= self.parse_term()?; }
+                    _ => return Ok(v),
+                }
+        }
+    }
+
+    fn parse_term(&mut self) -> Result<i64> {
+        let mut v = self.parse_factor()?;
+        loop {
+            self.skip_ws();
+            match self.peek() {
+                Some(b'*') => { self.pos += 1; v *= self.parse_factor()?; }
+                Some(b'/') => {
+                    self.pos += 1;
+                    let rhs = self.parse_factor()?;
+                    if rhs == 0 { bail!("division by zero"); }
+                    v /= rhs;
+                }
+                Some(b'%') => {
+                    self.pos += 1;
+                    let rhs = self.parse_factor()?;
+                    if rhs == 0 { bail!("modulo by zero"); }
+                    v %= rhs;
+                }
+                _ => return Ok(v),
+            }
+        }
+    }
+
+    fn parse_factor(&mut self) -> Result<i64> {
+        self.skip_ws();
+        if self.peek() == Some(b'-') {
+            self.pos += 1;
+            return Ok(-self.parse_factor()?);
+        }
+        if self.peek() == Some(b'+') {
+            self.pos += 1;
+            return self.parse_factor();
+        }
+        self.parse_atom()
+    }
+
+    fn parse_atom(&mut self) -> Result<i64> {
+        self.skip_ws();
+        match self.peek() {
+            Some(b'(') => {
+                self.pos += 1;
+                let v = self.parse_expr()?;
+                self.skip_ws();
+                match self.peek() {
+                    Some(b')') => { self.pos += 1; Ok(v) }
+                    _ => bail!("missing `)`"),
+                }
+            }
+            Some(b'0'..=b'9') => {
+                let start = self.pos;
+                while let Some(b'0'..=b'9') = self.peek() {
+                    self.pos += 1;
+                }
+                let s = std::str::from_utf8(&self.src[start..self.pos])
+                    .expect("digits are ASCII");
+                s.parse::<i64>().map_err(|e| anyhow!("bad number `{}`: {}", s, e))
+            }
+            Some(b'a'..=b'z' | b'A'..=b'Z' | b'_') => {
+                let start = self.pos;
+                while let Some(b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'0'..=b'9') = self.peek() {
+                    self.pos += 1;
+                }
+                let s = std::str::from_utf8(&self.src[start..self.pos])
+                    .expect("ident is ASCII");
+                match s {
+                    "monitor_w" => Ok(self.mw),
+                    "monitor_h" => Ok(self.mh),
+                    other       => bail!("unknown identifier `{}`", other),
+                }
+            }
+            Some(c) => bail!("unexpected character `{}`", c as char),
+            None    => bail!("unexpected end of expression"),
+        }
+    }
+
+    fn peek(&self) -> Option<u8> {
+        self.src.get(self.pos).copied()
+    }
+
+    fn skip_ws(&mut self) {
+        while let Some(b' ' | b'\t' | b'\n' | b'\r') = self.peek() {
+            self.pos += 1;
+        }
+    }
+}
+</file>
+
+<file path="src/hypr.rs">
+use anyhow::{anyhow, Context, Result};
+use serde::Deserialize;
+
+/// A single Hyprland client window.
+#[derive(Debug, Deserialize, Clone)]
+pub struct Client {
+    pub address  : String,
+    pub pinned   : bool,
+    pub workspace: Workspace,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct Workspace {
+    pub id  : i64,
+    pub name: String,
+}
+
+pub fn list_clients() -> Result<Vec<Client>> {
+    let out = std::process::Command::new("hyprctl")
+        .args(["clients", "-j"])
+        .output()
+        .context("spawning hyprctl clients -j")?;
+    if !out.status.success() {
+        return Err(anyhow!(
+            "hyprctl clients -j failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    let clients: Vec<Client> = serde_json::from_slice(&out.stderr)
+        .or_else(|_| serde_json::from_slice(&out.stdout))
+        .context("parsing hyprctl clients -j output")?;
+    Ok(clients)
+}
+
+pub fn active_workspace_id() -> Result<i64> {
+    let out = std::process::Command::new("hyprctl")
+        .args(["activeworkspace", "-j"])
+        .output()
+        .context("spawning hyprctl activeworkspace -j")?;
+    if !out.status.success() {
+        return Err(anyhow!(
+            "hyprctl activeworkspace -j failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    let ws: Workspace = serde_json::from_slice(&out.stdout)
+        .or_else(|_| serde_json::from_slice(&out.stderr))
+        .context("parsing hyprctl activeworkspace -j output")?;
+    Ok(ws.id)
+}
+
+/// Return the focused window's address, or `None` if no window is focused.
+pub fn focused_address() -> Result<Option<String>> {
+    let out = std::process::Command::new("hyprctl")
+        .args(["activewindow", "-j"])
+        .output()
+        .context("spawning hyprctl activewindow -j")?;
+    if !out.status.success() {
+        return Err(anyhow!(
+            "hyprctl activewindow -j failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    // activewindow prints `{}` (empty object) when no window is focused; treat
+    // that as None instead of a parse error.
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .or_else(|_| serde_json::from_slice(&out.stderr))
+        .context("parsing hyprctl activewindow -j output")?;
+    Ok(v.get("address").and_then(|a| a.as_str()).map(|s| s.to_string()))
+}
+
+/// All low-level dispatchers go through `hl.dispatch(...)`. Hyprland's Lua
+/// parser expects table literals, so the helpers below format them inline.
+///
+/// Window-targeting dispatchers all take `{ window = "address:<hex>" }`.
+
+pub fn pin(address: &str) -> Result<()> {
+    dispatch(&format!(
+        "hl.dsp.window.pin({{ window = \"address:{}\" }})",
+        address
+    ))
+}
+
+pub fn unpin(address: &str) -> Result<()> {
+    dispatch(&format!(
+        "hl.dsp.window.pin({{ window = \"address:{}\", action = \"unset\" }})",
+        address
+    ))
+}
+
+pub fn float_enable(address: &str) -> Result<()> {
+    dispatch(&format!(
+        "hl.dsp.window.float({{ window = \"address:{}\", action = 1 }})",
+        address
+    ))
+}
+
+/// Move a window to a named workspace. `follow` switches focus to the new ws.
+pub fn move_to_workspace(address: &str, workspace: &str, follow: bool) -> Result<()> {
+    dispatch(&format!(
+        "hl.dsp.window.move({{ window = \"address:{}\", workspace = \"{}\", follow = {} }})",
+        address, workspace, follow,
+    ))
+}
+
+/// Position a window at (x, y). Coordinates are forwarded verbatim to
+/// Position a window at (x, y). Coordinates are pre-resolved pixel integers
+/// (the config layer evaluates `monitor_w/3-1` etc. before we get here).
+pub fn move_abs(address: &str, x: i64, y: i64) -> Result<()> {
+    dispatch(&format!(
+        "hl.dsp.window.move({{ window = \"address:{}\", x = {}, y = {} }})",
+        address, x, y,
+    ))
+}
+
+/// Resize a window to (w, h). Same pixel-integer contract as `move_abs`.
+pub fn resize(address: &str, w: i64, h: i64) -> Result<()> {
+    dispatch(&format!(
+        "hl.dsp.window.resize({{ window = \"address:{}\", x = {}, y = {} }})",
+        address, w, h,
+    ))
+}
+
+pub fn focus(address: &str) -> Result<()> {
+    dispatch(&format!(
+        "hl.dsp.focus({{ window = \"address:{}\" }})",
+        address
+    ))
+}
+
+fn dispatch(spec: &str) -> Result<()> {
+    let status = std::process::Command::new("hyprctl")
+        .args(["dispatch", spec])
+        .status()
+        .with_context(|| format!("spawning hyprctl dispatch {}", spec))?;
+    if !status.success() {
+        return Err(anyhow!("hyprctl dispatch `{}` failed", spec));
+    }
+    Ok(())
+}
+</file>
+
+<file path="src/dock.rs">
+use crate::config::{Config, SlotSpec};
+use crate::hypr;
+use crate::state::State;
+use anyhow::{anyhow, Result};
+use std::path::Path;
+use std::time::Duration;
+
+/// Settle time after a single Hyprland dispatcher call. Most dispatchers
+/// return `ok` before the compositor applies the state change — a
+/// follow-up dispatcher targeting the same window can race the in-flight
+/// update and silently fail. 500ms is empirically required on Hyprland
+/// 0.56.x; shorter values (200ms, 80ms) intermittently lost the float,
+/// resize, move, or pin step. Used between every dispatcher pair.
+const DISPATCH_SETTLE: Duration = Duration::from_millis(500);
+
+/// Settle time after a workspace switch (especially `special:` →
+/// regular). 1500ms is empirically required to make `move_to_workspace`
+/// from a special workspace settle before subsequent position
+/// dispatchers fire; shorter windows let Hyprland silently lose focus
+/// on the moved window and the float/resize/move/pin chain ends up
+/// targeting the wrong window.
+const WORKSPACE_SETTLE: Duration = Duration::from_millis(1500);
+
+/// Bind the currently-focused window to `slot`: float + resize + move +
+/// pin + focus, then record the binding in the runtime state file.
+///
+/// Steps:
+///   1. Resolve the focused window's address.
+///   2. Drop any prior binding this slot had (unpin if the previous
+///      occupant is still around).
+///   3. Move the window onto the active workspace and re-focus.
+///   4. Make it floating (and wait for the state to settle).
+///   5. Resize + move it into the slot's geometry.
+///   6. Pin it.
+///   7. Persist `slot -> address`.
+pub fn dock(cfg: &Config, slot: &str, state_path: &Path) -> Result<()> {
+    let spec = &cfg.slots[slot];
+    let address = hypr::focused_address()?
+        .ok_or_else(|| anyhow!("no focused window to dock"))?;
+
+    let mut state = State::load(state_path);
+    release_existing(&state, slot, &address);
+    state.bind(slot, &address);
+
+    let cur_id = hypr::active_workspace_id()?;
+    // Focus first: position-mode dispatchers (`move`, `resize`) operate
+    // on the active window and ignore any `window` field on Hyprland
+    // 0.56.x. Re-focusing is also needed after `move_to_workspace`,
+    // which drops focus on the moved window.
+    hypr::focus(&address)?;
+    std::thread::sleep(DISPATCH_SETTLE);
+    hypr::move_to_workspace(&address, &cur_id.to_string(), false)?;
+    std::thread::sleep(WORKSPACE_SETTLE);
+    hypr::focus(&address)?;
+    std::thread::sleep(DISPATCH_SETTLE);
+    hypr::float_enable(&address)?;
+    std::thread::sleep(DISPATCH_SETTLE);
+    apply_geometry(&address, spec)?;
+    hypr::pin(&address)?;
+    state.save(state_path)?;
+    Ok(())
+}
+
+/// Unpin the focused window. Keeps its current workspace and clears any
+/// recorded binding for it (if it's the bound window for some slot). No-op
+/// if the focused window is not pinned or there is no focused window.
+pub fn undock(state_path: &Path) -> Result<()> {
+    let Some(address) = hypr::focused_address()? else {
+        return Ok(());
+    };
+    let clients = hypr::list_clients()?;
+    let mut state = State::load(state_path);
+
+    if let Some(c) = clients.iter().find(|c| c.address == address) {
+        if c.pinned {
+            hypr::unpin(&address)?;
+        }
+    }
+    // Drop any slot binding that points at this address.
+    let bound_to: Vec<String> = state.slots.iter()
+        .filter_map(|(s, a)| (a == &address).then(|| s.clone()))
+        .collect();
+    for s in bound_to {
+        state.clear(&s);
+    }
+    state.save(state_path)?;
+    Ok(())
+}
+
+/// Show or hide the slot's bound window based on its current state.
+///
+/// State is in two places:
+///   * The runtime state file maps `slot -> window_address`.
+///   * Hyprland tells us whether that window still exists and whether it's
+///     currently pinned.
+///
+/// `dock` happens when there is no bound window yet (or the bound window
+/// has been closed). Otherwise we flip the bound window's visibility.
+pub fn toggle(cfg: &Config, slot: &str, state_path: &Path) -> Result<()> {
+    let spec = &cfg.slots[slot];
+    let mut state = State::load(state_path);
+    let clients = hypr::list_clients()?;
+
+    let Some(address) = state.slots.get(slot).cloned() else {
+        return dock(cfg, slot, state_path);
+    };
+    let Some(occ) = clients.iter().find(|c| c.address == address).cloned() else {
+        // Bound window is gone — drop the stale binding and dock whatever
+        // is currently focused.
+        state.clear(slot);
+        state.save(state_path)?;
+        return dock(cfg, slot, state_path);
+    };
+
+    if occ.pinned {
+        hide_address(&occ.address, &spec.stash)?;
+    } else {
+        hypr::focus(&occ.address)?;
+        std::thread::sleep(DISPATCH_SETTLE);
+        let cur_id = hypr::active_workspace_id()?;
+        hypr::move_to_workspace(&occ.address, &cur_id.to_string(), false)?;
+        std::thread::sleep(WORKSPACE_SETTLE);
+        show_address(&occ.address, spec)?;
+    }
+    Ok(())
+}
+
+/// Send a window to its stash and unpin it. Idempotent. Re-focuses the
+/// window between unpin and move because `hl.dsp.window.pin(..., unset)`
+/// drops focus on Hyprland 0.56.x; subsequent `move_to_workspace`
+/// dispatchers target the active window, not the one we asked for.
+fn hide_address(address: &str, stash: &str) -> Result<()> {
+    let clients = hypr::list_clients()?;
+    if let Some(c) = clients.iter().find(|c| c.address == address) {
+        if c.pinned {
+            hypr::unpin(address)?;
+            std::thread::sleep(DISPATCH_SETTLE);
+            hypr::focus(address)?;
+            std::thread::sleep(DISPATCH_SETTLE);
+        }
+        if c.workspace.name != stash {
+            hypr::move_to_workspace(address, stash, false)?;
+        }
+    }
+    Ok(())
+}
+
+/// Float + resize + move + pin. Used by `toggle` to redisplay a
+/// previously-bound window that has since moved or resized. The caller is
+/// expected to have already moved the window to the active workspace and
+/// waited `WORKSPACE_SETTLE` so focus on the moved window has settled.
+fn show_address(address: &str, spec: &SlotSpec) -> Result<()> {
+    hypr::focus(address)?;
+    std::thread::sleep(DISPATCH_SETTLE);
+    hypr::float_enable(address)?;
+    std::thread::sleep(DISPATCH_SETTLE);
+    apply_geometry(address, spec)?;
+    hypr::pin(address)?;
+    Ok(())
+}
+
+fn apply_geometry(address: &str, spec: &SlotSpec) -> Result<()> {
+    hypr::resize(address, spec.width, spec.height)?;
+    std::thread::sleep(DISPATCH_SETTLE);
+    hypr::move_abs(address, spec.x, spec.y)?;
+    std::thread::sleep(DISPATCH_SETTLE);
+    Ok(())
+}
+
+/// If `slot` already binds to a different live window, unpin that window
+/// so it doesn't shadow the new occupant. Best-effort: pin state is
+/// queried via Hyprland; a missing or already-hidden binding is fine.
+fn release_existing(state: &State, slot: &str, new_address: &str) {
+    let Some(prev) = state.slots.get(slot) else { return };
+    if prev == new_address {
+        return;
+    }
+    let Ok(clients) = hypr::list_clients() else { return };
+    let Some(c) = clients.iter().find(|c| c.address == *prev) else {
+        return;
+    };
+    if c.pinned {
+        let _ = hypr::unpin(prev);
+    }
+}
+</file>
+
+<file path=".gitignore">
+/target
+Cargo.lock.bak
+</file>
+
+<file path="assets/dock.toml">
+# jgdock configuration.
+#
+# jgdock is a window-based dock manager. Each `[slots.<name>]` block defines
+# a generic dock position (geometry + a stash workspace). Any focused window
+# can be docked into any slot via:
+#
+#   jgdock dock   <slot>     # pin the focused window into slot geometry
+#   jgdock undock            # unpin the focused window
+#   jgdock toggle <slot>     # show slot's window if hidden, hide if shown
+#   jgdock ls                # list configured slots
+#
+# Geometry axes accept either raw pixel integers (e.g. `y = 27`) or Hyprland
+# monitor-arithmetic expressions as strings (e.g. `width = "monitor_w/3-1"`).
+# Anything that Hyprland's `dispatcher` evaluates is allowed.
+#
+# Each slot's `stash` is the special workspace used both as the window's
+# "hidden" home and as the slot's registry: the window currently sitting on
+# `<stash>` IS the slot's bound window. Defaults to `special:<slot_name>` when
+# omitted. Set `stash = ""` to disable the registry (toggle won't find the
+# prior occupant, but dock/undock still work).
+
+[slots.right]
+x       = "monitor_w*2/3"
+y       = 27
+width   = "monitor_w/3-1"
+height  = "monitor_h-28"
+
+[slots.left]
+x       = 0
+y       = 27
+width   = "monitor_w/3-1"
+height  = "monitor_h-28"
+
+[slots.center]
+x       = "monitor_w/3"
+y       = 27
+width   = "monitor_w/3-1"
+height  = "monitor_h-28"
+
+[slots.full]
+x       = 0
+y       = 27
+width   = "monitor_w-2"
+height  = "monitor_h-28"
+</file>
+
+<file path="Cargo.toml">
+[package]
+name = "jgdock"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "jgdock"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+opt-level = 0
+</file>
+
+<file path="assets/jgdock.lua">
+-- jgdock: Hyprland integration snippet.
+--
+-- Drop this into your Hyprland config by adding two lines to
+-- ~/.config/hypr/hyprland.lua (after the Omarchy requires):
+--
+--   local home = os.getenv("HOME")
+--   package.path = home .. "/.config/jgdock/?.lua;" .. package.path
+--   require("jgdock")
+--
+-- The installer wires this up automatically with a marker comment so it
+-- can be undone by ./install.sh uninstall. Manual installation works too
+-- — copy this file (plus bindings.lua) to ~/.config/jgdock/ and add the
+-- three lines above.
+--
+-- jgdock is window-based: there are no per-app window rules. The runtime
+-- owns geometry (it queries dock.toml for slot positions and applies them
+-- at dock-time). This loader only registers keybindings; edit bindings.lua
+-- to add or change them.
+
+require("bindings")
+</file>
+
+<file path="src/main.rs">
+mod config;
+mod dock;
+mod hypr;
+mod state;
+
+use anyhow::{bail, Result};
+use clap::{Parser as ClapParser, Subcommand};
+
+const DEFAULT_CONFIG_ENV: &str = "JGDOCK_CONFIG";
+
+#[derive(ClapParser, Debug)]
+#[command(version, about = "Slot-based dock manager for Hyprland")]
+struct Cli {
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Subcommand, Debug)]
+enum Cmd {
+    /// List configured slots.
+    Ls,
+    /// Bind the focused window to a slot: float + size + position + pin + focus.
+    Dock   { slot: String },
+    /// Unpin the focused window. Keeps its current workspace.
+    Undock,
+    /// Show the slot's window if hidden, hide if shown.
+    Toggle { slot: String },
+}
+
+fn config_path() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var(DEFAULT_CONFIG_ENV) {
+        return std::path::PathBuf::from(p);
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    std::path::PathBuf::from(home).join(".config/jgdock/dock.toml")
+}
+
+fn run() -> Result<()> {
+    let cli = Cli::parse();
+    let cfg_path = config_path();
+    let cfg = config::Config::load(&cfg_path)?;
+    let state_path = state::default_path();
+
+    match cli.cmd {
+        Cmd::Ls => {
+            println!("{:<10} {:<14} {}", "SLOT", "STASH", "GEOMETRY (x,y,w,h)");
+            for (name, spec) in &cfg.slots {
+                println!(
+                    "{:<10} {:<14} {},{},{},{}",
+                    name, spec.stash,
+                    spec.x, spec.y, spec.width, spec.height,
+                );
+            }
+            eprintln!("(monitor: {}x{})", cfg.monitor_w, cfg.monitor_h);
+        }
+        Cmd::Dock   { slot } => require(&cfg, &slot, || {
+            dock::dock(&cfg, &slot, &state_path)
+        })?,
+        Cmd::Undock          => dock::undock(&state_path)?,
+        Cmd::Toggle { slot } => require(&cfg, &slot, || {
+            dock::toggle(&cfg, &slot, &state_path)
+        })?,
+    }
+    Ok(())
+}
+
+fn require<F>(cfg: &config::Config, slot: &str, f: F) -> Result<()>
+where F: FnOnce() -> Result<()> {
+    if !cfg.slots.contains_key(slot) {
+        bail!("unknown slot: {}", slot);
+    }
+    f()
+}
+
+fn main() {
+    if let Err(e) = run() {
+        let msg = e.chain().map(|c| c.to_string()).collect::<Vec<_>>().join(": ");
+        eprintln!("jgdock: {}", msg);
+        std::process::exit(1);
+    }
+}
+</file>
+
+<file path="README.md">
+# jgdock
+
+Slot-based dock manager for Hyprland on Omarchy (or any Arch/Hyprland box).
+
+A dock is a slot — a rectangle on the screen with a name (`left`, `right`,
+`center`, `full`, ...). Any focused window can be docked into any slot.
+Once docked, `toggle <slot>` shows or hides that same window. There are no
+app rules in the binary, no per-app TOML blocks, and no per-app Lua
+window-rules.
+
+```
+                     jgdock
+                       │
+              ┌────────┴────────┐
+              │                 │
+          SLOT CONFIG       RUNTIME STATE
+       (dock.toml)        (state.toml)
+              │                 │
+       left/right/etc.      slot → window address
+              │                 │
+              └────────┬────────┘
+                       │
+                currently focused
+                     window
+```
+
+Workflow:
+
+```text
+Open any app
+     ↓
+Focus it
+     ↓
+SUPER + SHIFT + RIGHT         (or: jgdock dock right)
+     ↓
+App becomes the right dock
+```
+
+After that, `SUPER + RIGHT` (or `jgdock toggle right`) shows/hides the
+right dock. The slot doesn't care whether the bound window is OMP, Oterm,
+Telegram, Kitty, or Firefox — it's a window address.
+
+## Install
+
+```sh
+git clone https://github.com/jaylogalam/omarchy-custom-docks.git ~/Projects/jgdock
+cd ~/Projects/jgdock
+./install.sh            # or: ./install.sh install
+```
+
+## Update (other devices)
+
+```sh
+cd ~/Projects/jgdock
+./install.sh update
+```
+
+Fetches from `origin`, fast-forwards, and rebuilds + reinstalls. Refuses
+if local changes are uncommitted or if the branch has diverged (resolve
+manually with `git pull --rebase` first).
+
+The installer:
+
+1. Builds the binary with `cargo build --release`.
+2. Installs the binary to `~/.local/bin/jgdock`.
+3. Installs the packaged config to `~/.config/jgdock/dock.toml`; seeds
+   the user location only if absent. If an existing file uses the legacy
+   `[docks.<name>]` shape, it's moved aside (`dock.toml.pre-slot.bak.*`)
+   and the new slot-based config is seeded. Existing slot-based configs
+   are left alone.
+4. Installs the Hyprland snippet at `~/.config/jgdock/jgdock.lua`
+   (co-located with `dock.toml`). The loader requires `bindings.lua`;
+   both land together.
+5. Drops any legacy `windowrules.lua` left behind by older installs.
+6. If `~/.config/hypr/hyprland.lua` exists, appends a marker + wire
+   block: a 2-line `package.path` prepend + `require("jgdock")`.
+7. If a Hyprland session is reachable, runs `hyprctl reload` and
+   verifies `configerrors` is clean. Skipped if there's no running
+   session.
+
+User-only: refuses to run as root. There's no system install mode; copy
+the repo to a user-owned path and run `./install.sh` there. Idempotent.
+
+## Uninstall
+
+```sh
+./install.sh uninstall
+```
+
+Removes:
+
+- The binary (`~/.local/bin/jgdock`).
+- The Hyprland snippet (`~/.config/jgdock/jgdock.lua`,
+  `bindings.lua`).
+- Any legacy `windowrules.lua` from a previous version.
+- The wire block + marker comment in `hyprland.lua`.
+
+Then runs `hyprctl reload` and verifies `configerrors` is clean.
+
+Does **not** delete:
+
+- The source directory (`~/Projects/jgdock/`).
+- The user config (`~/.config/jgdock/dock.toml`) — left in place; user
+  edits win.
+- The runtime state file (`~/.local/state/jgdock/state.toml`) — slot
+  bindings.
+
+## How `require("jgdock")` resolves
+
+Omarchy's bootstrap adds three roots to Lua's `package.path`:
+
+```lua
+~/.local/state/?.lua
+~/.config/?.lua
+$OMARCHY_PATH/?.lua
+```
+
+None of those is `~/.config/jgdock/?.lua`, so `require("jgdock")` would
+fail by default. The installer fixes this by prepending a fourth root
+at the top of `hyprland.lua`:
+
+```lua
+package.path = (os.getenv("HOME") or "") .. "/.config/jgdock/?.lua;" .. package.path
+require("jgdock")
+```
+
+After the prepend, `require("jgdock")` resolves to
+`~/.config/jgdock/jgdock.lua` (where the snippet lives, next to
+`dock.toml`). The prepend is safe to repeat — each install re-detects
+the existing block by its marker comment and skips the append.
+
+## Usage
+
+```sh
+jgdock ls                  # list configured slots
+jgdock dock   <slot>       # pin the focused window into slot geometry
+jgdock undock              # unpin the focused window (clears its binding)
+jgdock toggle <slot>       # show slot's window if hidden, hide if shown
+```
+
+Default keybindings (defined in `assets/bindings.lua`):
+
+| Key                       | Action         |
+|---------------------------|----------------|
+| `SUPER + RIGHT`           | Toggle right   |
+| `SUPER + SHIFT + RIGHT`   | Dock to right  |
+| `SUPER + LEFT`            | Toggle left    |
+| `SUPER + SHIFT + LEFT`    | Dock to left   |
+| `SUPER + U`               | Undock focused |
+
+`center` and `full` slots are not bound by default — uncomment them in
+`bindings.lua` if you use those slots.
+
+## Layout
+
+```
+jgdock/
+├── Cargo.toml
+├── Cargo.lock
+├── src/
+│   ├── main.rs       # CLI dispatch (clap)
+│   ├── config.rs     # dock.toml parser (serde + toml, with arithmetic
+│   │                 #   expression evaluator for monitor-relative
+│   │                 #   dimensions)
+│   ├── hypr.rs       # hyprctl IPC wrapper
+│   ├── state.rs      # slot -> window-address state file
+│   └── dock.rs       # dock / undock / toggle (state-driven)
+├── assets/
+│   ├── dock.toml             # default config (4 slots: right/left/center/full)
+│   ├── jgdock.lua            # top-level loader: requires bindings.lua
+│   └── bindings.lua         # keybindings
+├── install.sh        # builds + installs everything
+└── README.md
+```
+
+## Configuration
+
+`~/.config/jgdock/dock.toml` defines slots. Each slot is a generic
+position; it has no notion of which app fills it.
+
+```toml
+[slots.right]
+x       = "monitor_w*2/3"   # right-third start
+y       = 27
+width   = "monitor_w/3-1"
+height  = "monitor_h-28"
+
+[slots.left]
+x       = 0
+y       = 27
+width   = "monitor_w/3-1"
+height  = "monitor_h-28"
+```
+
+Geometry axes accept either raw pixel integers (`y = 27`) or Hyprland
+monitor-arithmetic expressions as strings (`width = "monitor_w/3-1"`).
+The parser supports `+ - *`, integer `/` and `%`, unary minus,
+parentheses, and the identifiers `monitor_w` / `monitor_h`. Anything
+Hyprland itself understands is allowed; the parser evaluates against the
+focused monitor's pixel dimensions at load time.
+
+`stash` is the special workspace used to hide the slot's window when
+it's toggled off. It defaults to `special:<slot_name>`. Each slot needs
+its own stash — slots that share a stash will fight over who owns the
+window.
+
+## Adding a slot
+
+Add a `[slots.<name>]` block to `~/.config/jgdock/dock.toml`. Add a
+matching pair of bindings in `assets/bindings.lua`. Then
+`./install.sh install` (or `./install.sh update` to pick up changes
+from another machine) — the cargo build overwrites only the binary;
+config edits in your `~/.config/jgdock/dock.toml` are preserved.
+
+There is no app entry to add. The dock takes whatever window is focused
+when you press the dock shortcut.
+
+## Why Rust
+
+Bash + jq + python3 worked, but the boolean/string mismatch in pin
+idempotency bit us during smoke testing. Rust catches that class of bug
+at compile time. The binary is also ~3× faster to start (~40 ms vs
+~120 ms), which matters for keybind latency if you ever chain multiple
+docks.
+
+The shell-out to `hyprctl` is preserved for protocol parity — a future
+optimization could talk the Hyprland IPC socket directly.
+
+## Upstream
+
+Source lives only in `~/Projects/jgdock/`. The runtime files (binary,
+config, snippet, state) are installed under `~/.local/` and
+`~/.config/` and are excluded by this repo's gitignore.
+</file>
+
+<file path="install.sh">
+#!/usr/bin/env bash
+# jgdock installer (user-only).
+#
+# Builds from source and installs:
+#   - Binary at ~/.local/bin/jgdock
+#   - Default config at ~/.config/jgdock/dock.toml (skipped if user has one;
+#     legacy [docks.*] files are backed up and replaced with [slots.*])
+#   - Hyprland snippet at ~/.config/jgdock/jgdock.lua (and bindings.lua,
+#     loaded via require("jgdock") after a package.path prepend written
+#     into hyprland.lua)
+#
+# jgdock is window-based: there are no per-app window rules. The runtime
+# owns geometry; the snippet only registers keybindings.
+# Subcommands:
+#   install (default)  Build + install from local source.
+#   update             git fetch + fast-forward merge, then build + install.
+#                      Use this on devices that already have the repo cloned
+#                      to pick up changes pushed to the remote.
+#   uninstall          Remove the binary, symlink, Hyprland snippet, and
+#                      the require block from hyprland.lua. Prompts before
+#                      removing the user config. Does NOT delete the source
+#                      directory or cargo registry.
+#
+# Idempotent: re-running is safe. Existing user config is never overwritten.
+# The wire block is detected by its marker comment, so old single-line
+# `require("hypr.jgdock")` blocks from a prior version are migrated
+# automatically.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+ASSETS="$REPO_ROOT/assets"
+PKG="jgdock"
+CMD="${1:-install}"
+
+BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
+CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
+HYPR_DIR="$CFG_DIR/jgdock"
+USER_CFG="$CFG_DIR/jgdock/dock.toml"
+USER_HYPR="$CFG_DIR/hypr/hyprland.lua"
+SNIPPET="$HYPR_DIR/jgdock.lua"
+SNIPPET_RULES="$HYPR_DIR/windowrules.lua"
+SNIPPET_BINDINGS="$HYPR_DIR/bindings.lua"
+
+usage() {
+    cat <<EOF
+usage: $0 [install|update|uninstall]
+  install    Build + install from local source (default).
+  update     Fast-forward merge from origin, then build + install.
+  uninstall  Remove binary, snippet files, and require block. Prompts
+             before removing the user config; source dir is left alone.
+
+User-only install. Refuses to run as root.
+EOF
+    exit 2
+}
+
+[[ "$CMD" == "-h" || "$CMD" == "--help" || "$CMD" == "help" ]] && usage
+
+if [[ $EUID -eq 0 ]]; then
+    echo "error: refusing to run as root. jgdock has no system install mode." >&2
+    echo "       Run as the user who will own the binary." >&2
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Strip the marker + the wire block that follows it from hyprland.lua.
+# The wire block is one or more lines, always terminated by a blank line.
+# Drops the marker and everything up to and including the first blank line
+# that follows.
+#
+# Used by both the uninstaller (remove entirely) and the installer (re-append
+# with the current block shape to migrate from an older shape).
+strip_wire_block() {
+    local user_hypr="$1"
+    local marker="$2"
+    local tmp="${user_hypr}.jgdock.strip.$$"
+    if ! awk -v m="$marker" '
+        $0 == m { skip = 1; next }
+        skip == 1 {
+            if ($0 ~ /^[[:space:]]*$/) { skip = 0 }
+            next
+        }
+        { print }
+    ' "$user_hypr" > "$tmp"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    # Trim trailing blanks the removal may have created.
+    local trimmed
+    trimmed=$(awk '
+        { lines[NR] = $0 }
+        END {
+            last = NR
+            while (last > 0 && lines[last] ~ /^[[:space:]]*$/) last--
+            for (i = 1; i <= last; i++) print lines[i]
+        }
+    ' "$tmp")
+    printf '%s\n' "$trimmed" > "$tmp"
+    mv "$tmp" "$user_hypr"
+}
+
+# ---------------------------------------------------------------------------
+# update: pull latest from the configured remote.
+# Refuses if there are local uncommitted changes or a non-fast-forward state.
+do_update() {
+    if [[ ! -d "$REPO_ROOT/.git" ]]; then
+        echo "error: $REPO_ROOT is not a git checkout; nothing to update." >&2
+        exit 1
+    fi
+
+    local branch
+    branch=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    if [[ -z "$branch" || "$branch" == "HEAD" ]]; then
+        echo "error: not on a branch (detached HEAD?); cannot update safely." >&2
+        exit 1
+    fi
+
+    if ! git -C "$REPO_ROOT" remote get-url origin >/dev/null 2>&1; then
+        echo "error: no 'origin' remote configured; cannot update." >&2
+        exit 1
+    fi
+
+    # Refuse to clobber local edits.
+    if ! git -C "$REPO_ROOT" diff --quiet HEAD 2>/dev/null \
+       || ! git -C "$REPO_ROOT" diff --cached --quiet 2>/dev/null; then
+        echo "error: local uncommitted changes; commit or stash before updating." >&2
+        git -C "$REPO_ROOT" status --short >&2
+        exit 1
+    fi
+
+    echo "==> Fetching from origin/$branch"
+    if ! git -C "$REPO_ROOT" fetch origin "$branch"; then
+        echo "error: git fetch failed (offline?); aborting update." >&2
+        exit 1
+    fi
+
+    local local_sha remote_sha
+    local_sha=$(git -C "$REPO_ROOT" rev-parse HEAD)
+    remote_sha=$(git -C "$REPO_ROOT" rev-parse "origin/$branch")
+
+    if [[ "$local_sha" == "$remote_sha" ]]; then
+        echo "==> Already up to date ($(git -C "$REPO_ROOT" rev-parse --short HEAD))"
+        return 0
+    fi
+
+    # Fast-forward only — refuse to rebase/merge if local has diverged.
+    if ! git -C "$REPO_ROOT" merge --ff-only "origin/$branch"; then
+        echo "error: local branch has diverged from origin/$branch." >&2
+        echo "       Resolve manually with git pull --rebase, then retry." >&2
+        exit 1
+    fi
+
+    echo "==> Updated $(git -C "$REPO_ROOT" rev-parse --short "$local_sha") -> $(git -C "$REPO_ROOT" rev-parse --short HEAD)"
+}
+
+# ---------------------------------------------------------------------------
+# uninstall: remove the binary and the require
+# block from hyprland.lua. Asks before touching the user config (which may
+# contain hand-edited dock specs). Leaves the source directory and cargo
+# registry cache alone — those are not ours to delete.
+do_uninstall() {
+    local removed=0
+
+    # 1. Strip the marker + wire block from hyprland.lua (if present).
+    local marker="-- $PKG: managed by install.sh; safe to delete if you uninstall."
+    if [[ -f "$USER_HYPR" ]] && grep -F -- "$marker" "$USER_HYPR" >/dev/null 2>&1; then
+        if strip_wire_block "$USER_HYPR" "$marker"; then
+            echo "==> Removed require block from $USER_HYPR"
+            removed=1
+        else
+            echo "warning: failed to strip require block from $USER_HYPR" >&2
+        fi
+    fi
+
+    # 2. Remove the binary and any symlink at the user bin dir.
+    if [[ -e "$BIN_DIR/$PKG" && ! -L "$BIN_DIR/$PKG" ]]; then
+        rm -f "$BIN_DIR/$PKG"
+        echo "==> Removed $BIN_DIR/$PKG"
+        removed=1
+    fi
+    if [[ -L "$BIN_DIR/$PKG" ]]; then
+        rm -f "$BIN_DIR/$PKG"
+        echo "==> Removed symlink $BIN_DIR/$PKG"
+        removed=1
+    fi
+
+    # 3. Remove the legacy windowrules.lua left behind by older installs.
+    if [[ -e "$SNIPPET_RULES" ]]; then
+        rm -f "$SNIPPET_RULES"
+        echo "==> Removed legacy $SNIPPET_RULES"
+        removed=1
+    fi
+
+    # 4. Reload Hyprland if it's reachable.
+    if command -v hyprctl >/dev/null 2>&1; then
+        if hyprctl reload >/dev/null 2>&1; then
+            echo "==> Hyprland reloaded"
+            local errs
+            errs=$(hyprctl configerrors 2>&1 || true)
+            if [[ -n "$errs" ]]; then
+                echo "==> WARNING: Hyprland reported config errors:"
+                echo "$errs" | sed 's/^/    /'
+            fi
+        fi
+    fi
+
+    if [[ "$removed" -eq 0 ]]; then
+        echo "==> Nothing to remove (already uninstalled?)"
+    else
+        echo
+        echo "==> Done. Source directory left in place: $REPO_ROOT"
+        echo "    Remove it manually if you no longer need it:"
+        echo "      rm -rf '$REPO_ROOT'"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# install: build + drop files into the right places.
+do_install() {
+    local reload_needed=0
+
+    # 1. Build ---------------------------------------------------------------
+    echo "==> Building $PKG (release)"
+    if ! command -v cargo >/dev/null 2>&1; then
+        echo "error: cargo not found. Install Rust via:"
+        echo "  mise install rust@stable"
+        echo "  or https://rustup.rs/"
+        exit 1
+    fi
+    (cd "$REPO_ROOT" && cargo build --release)
+
+    # 2. Install binary ------------------------------------------------------
+    mkdir -p "$BIN_DIR"
+    echo "==> Installing binary to $BIN_DIR/$PKG"
+    install -Dm0755 "$REPO_ROOT/target/release/$PKG" "$BIN_DIR/$PKG"
+
+    # 3. Default config -----------------------------------------------------
+    # Seed the user's config dir only if absent OR if the existing file uses
+    # the legacy `[docks.<name>]` shape (window-based config no longer
+    # recognises that table). User edits win when the file is already on the
+    # current shape; legacy files are backed up next to themselves so a
+    # rollback path exists.
+    if [[ ! -e "$USER_CFG" ]]; then
+        echo "==> Seeding user config at $USER_CFG"
+        mkdir -p "$(dirname "$USER_CFG")"
+        install -Dm0644 "$ASSETS/dock.toml" "$USER_CFG"
+    elif grep -E '^\[docks\.' "$USER_CFG" >/dev/null 2>&1; then
+        local stamp bak
+        stamp=$(date +%Y%m%d%H%M%S)
+        bak="${USER_CFG}.pre-slot.bak.${stamp}"
+        mv "$USER_CFG" "$bak"
+        echo "==> Backed up legacy docks config to $bak"
+        install -Dm0644 "$ASSETS/dock.toml" "$USER_CFG"
+        echo "==> Seeded slot-based config at $USER_CFG"
+    else
+        echo "==> User config already exists; leaving $USER_CFG alone"
+    fi
+
+    # 4. Hyprland snippet ---------------------------------------------------
+    # jgdock.lua requires bindings.lua; both land together.
+    mkdir -p "$HYPR_DIR"
+    echo "==> Installing snippet to $SNIPPET"
+    install -Dm0644 "$ASSETS/jgdock.lua" "$SNIPPET"
+    echo "==> Installing bindings to $SNIPPET_BINDINGS"
+    install -Dm0644 "$ASSETS/bindings.lua" "$SNIPPET_BINDINGS"
+    # Drop the legacy windowrules.lua file left behind by older installs:
+    # window rules were per-app and are now owned by the runtime.
+    if [[ -e "$SNIPPET_RULES" && ! -L "$SNIPPET_RULES" ]]; then
+        rm -f "$SNIPPET_RULES"
+        echo "==> Removed legacy windowrules.lua"
+    fi
+
+    # 5. Wire up Hyprland (best-effort) -------------------------------------
+    # Per-user only: prepend $XDG_CONFIG_HOME/jgdock/?.lua to package.path
+    # and require("jgdock"). The block is wrapped in a marker comment so
+    # the uninstaller can find and remove it as a unit.
+    local wire_block=$'package.path = (os.getenv("HOME") or "") .. "/.config/jgdock/?.lua;" .. package.path\nrequire("jgdock")'
+    local marker="-- $PKG: managed by install.sh; safe to delete if you uninstall."
+    local expected_first
+    expected_first=$(printf '%s\n' "$wire_block" | head -n1)
+
+    if [[ -f "$USER_HYPR" ]]; then
+        if grep -F -- "$marker" "$USER_HYPR" >/dev/null 2>&1; then
+            # Marker present. Check whether the wire block below it matches
+            # what we'd write today. If yes, no-op. If no, migrate: strip
+            # the old block and re-append the new one.
+            local first_wire_line
+            first_wire_line=$(awk -v m="$marker" '
+                $0 == m { found = 1; next }
+                found == 1 && $0 != "" { print; exit }
+            ' "$USER_HYPR")
+            if [[ "$first_wire_line" == "$expected_first" ]]; then
+                echo "==> Hyprland config already wired (marker + matching block)"
+                reload_needed=0
+            else
+                echo "==> Migrating wire block to current shape"
+                if strip_wire_block "$USER_HYPR" "$marker"; then
+                    reload_needed=1
+                else
+                    echo "warning: failed to strip old wire block" >&2
+                fi
+            fi
+        fi
+        if [[ "$reload_needed" -eq 1 ]] || ! grep -F -- "$marker" "$USER_HYPR" >/dev/null 2>&1; then
+            # Append the marker + wire block. The block is N lines; printf
+            # inserts a trailing newline after the last line.
+            {
+                printf '\n%s\n' "$marker"
+                printf '%s\n' "$wire_block"
+            } >> "$USER_HYPR"
+            echo "==> Appended to $USER_HYPR:"
+            printf '    %s\n' "$wire_block"
+            reload_needed=1
+        fi
+    else
+        echo
+        echo "==> No $USER_HYPR found."
+        echo "    Create one and add these lines to load the dock rules:"
+        echo
+        printf '    %s\n' "$wire_block"
+        echo
+        reload_needed=0
+    fi
+
+    # Reload only if we changed something AND Hyprland is reachable. A fresh
+    # install on a machine without a running session shouldn't trigger anything.
+    # Also check configerrors after reload: hyprctl reload doesn't validate Lua
+    # syntax, so a bad edit can leave the session in an inconsistent state.
+    if [[ "$reload_needed" -eq 1 ]] && command -v hyprctl >/dev/null 2>&1; then
+        if hyprctl reload >/dev/null 2>&1; then
+            echo "==> Hyprland reloaded"
+            local errs
+            errs=$(hyprctl configerrors 2>&1 || true)
+            if [[ -n "$errs" ]]; then
+                echo "==> WARNING: Hyprland reported config errors:"
+                echo "$errs" | sed 's/^/    /'
+            fi
+        else
+            echo "==> hyprctl reload failed (no active session?); reload manually after first login"
+        fi
+    fi
+
+    echo
+    echo "==> Done (user install)."
+    echo "    Test: $PKG ls"
+}
+
+# Dispatch ------------------------------------------------------------------
+case "$CMD" in
+    install)   do_install ;;
+    update)    do_update; do_install ;;
+    uninstall) do_uninstall ;;
+    *)         usage ;;
+esac
+</file>
+
+</files>

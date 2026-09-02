@@ -1,6 +1,7 @@
 mod config;
 mod dock;
 mod hypr;
+mod state;
 
 use anyhow::{bail, Result};
 use clap::{Parser as ClapParser, Subcommand};
@@ -8,7 +9,7 @@ use clap::{Parser as ClapParser, Subcommand};
 const DEFAULT_CONFIG_ENV: &str = "JGDOCK_CONFIG";
 
 #[derive(ClapParser, Debug)]
-#[command(version, about = "Config-driven dock manager for Hyprland")]
+#[command(version, about = "Slot-based dock manager for Hyprland")]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -16,18 +17,14 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Cmd {
-    /// List configured docks.
+    /// List configured slots.
     Ls,
-    /// Show dock (spawn if absent).
-    Show   { name: String },
-    /// Hide dock to its stash.
-    Hide   { name: String },
-    /// Show or hide based on current state.
-    Toggle { name: String },
-    /// Spawn only; do not show/hide existing.
-    Spawn  { name: String },
-    /// Cycle docks in slot, show next.
-    Next   { slot: String },
+    /// Bind the focused window to a slot: float + size + position + pin + focus.
+    Dock   { slot: String },
+    /// Unpin the focused window. Keeps its current workspace.
+    Undock,
+    /// Show the slot's window if hidden, hide if shown.
+    Toggle { slot: String },
 }
 
 fn config_path() -> std::path::PathBuf {
@@ -42,39 +39,40 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     let cfg_path = config_path();
     let cfg = config::Config::load(&cfg_path)?;
+    let state_path = state::default_path();
 
     match cli.cmd {
         Cmd::Ls => {
-            println!("{:<12} {:<10} {:<22} {}", "NAME", "SLOT", "CLASS", "STASH");
-            for (name, spec) in &cfg.docks {
+            println!("{:<10} {:<14} {}", "SLOT", "STASH", "GEOMETRY (x,y,w,h)");
+            for (name, spec) in &cfg.slots {
                 println!(
-                    "{:<12} {:<10} {:<22} {}",
-                    name, spec.slot, spec.class, spec.stash
+                    "{:<10} {:<14} {},{},{},{}",
+                    name, spec.stash,
+                    spec.x, spec.y, spec.width, spec.height,
                 );
             }
+            eprintln!("(monitor: {}x{})", cfg.monitor_w, cfg.monitor_h);
         }
-        Cmd::Show   { name } => require(&cfg, &name, || dock::show(&cfg, &name))?,
-        Cmd::Hide   { name } => require(&cfg, &name, || dock::hide(&cfg.docks[&name]))?,
-        Cmd::Toggle { name } => require(&cfg, &name, || dock::toggle(&cfg, &name))?,
-        Cmd::Spawn  { name } => require(&cfg, &name, || dock::execute(&cfg, &name, dock::Op::Spawn))?,
-        Cmd::Next   { slot } => dock::cycle(&cfg, &slot)?,
+        Cmd::Dock   { slot } => require(&cfg, &slot, || {
+            dock::dock(&cfg, &slot, &state_path)
+        })?,
+        Cmd::Undock          => dock::undock(&state_path)?,
+        Cmd::Toggle { slot } => require(&cfg, &slot, || {
+            dock::toggle(&cfg, &slot, &state_path)
+        })?,
     }
     Ok(())
 }
 
-fn require<F>(cfg: &config::Config, name: &str, f: F) -> Result<()>
+fn require<F>(cfg: &config::Config, slot: &str, f: F) -> Result<()>
 where F: FnOnce() -> Result<()> {
-    if !cfg.docks.contains_key(name) {
-        // bash version: exit 3 ("unknown dock").
-        bail!("unknown dock: {}", name);
+    if !cfg.slots.contains_key(slot) {
+        bail!("unknown slot: {}", slot);
     }
     f()
 }
 
 fn main() {
-    // Match the bash contract: clap's own parse errors print usage and exit 2
-    // before run() is ever called, so anything reaching this branch is a
-    // runtime error (config not found, hyprctl failed, unknown dock, etc.).
     if let Err(e) = run() {
         let msg = e.chain().map(|c| c.to_string()).collect::<Vec<_>>().join(": ");
         eprintln!("jgdock: {}", msg);
