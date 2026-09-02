@@ -1,10 +1,10 @@
-# jsg-custom-dock
+# jgdock
 
 Config-driven dock manager for Hyprland on Omarchy (or any Arch/Hyprland box).
 
 Each dockable app (omp, oterm, telegram, ...) is one `[docks.<name>]` block in
 `assets/dock.toml`. The Rust binary at `src/` handles spawn, show/hide, stash,
-mutex between siblings. A Lua snippet at `assets/jsg-custom-dock.lua` registers
+mutex between siblings. A Lua snippet at `assets/jgdock.lua` registers
 the window rules (float, pin, geometry) and keybindings; load it from your
 Hyprland config with one `require()` line.
 
@@ -32,17 +32,17 @@ diverged (resolve manually with `git pull --rebase` first).
 The installer:
 
 1. Builds the binary with `cargo build --release`.
-2. Installs to `/usr/bin/jsg-custom-dock` (system, root) or
-   `~/.local/bin/jsg-custom-dock` (user); always also creates the symlink at
-   `~/.local/bin/jsg-custom-dock`.
+2. Installs to `/usr/bin/jgdock` (system, root) or
+   `~/.local/bin/jgdock` (user); always also creates the symlink at
+   `~/.local/bin/jgdock`.
 3. Installs the packaged config to `/etc/omarchy/dock.toml` (system) or
    `~/.config/omarchy/dock.toml` (user); seeds the user location only if
    absent — your edits are preserved on re-install.
-4. Installs the Hyprland snippet at `/etc/hypr/jsg-custom-dock.lua` (system) or
-   `~/.config/hypr/jsg-custom-dock.lua` (user).
+4. Installs the Hyprland snippet at `/etc/hypr/jgdock.lua` (system) or
+   `~/.config/hypr/jgdock.lua` (user).
 5. If `~/.config/hypr/hyprland.lua` exists and isn't already wired, appends
-   `require("hypr.jsg-custom-dock")` (per-user) or
-   `require("/etc/hypr/jsg-custom-dock")` (system) with a marker comment.
+   `require("hypr.jgdock")` (per-user) or
+   `require("/etc/hypr/jgdock")` (system) with a marker comment.
 6. If a Hyprland session is reachable, runs `hyprctl reload` and verifies
    `configerrors` is clean. Skipped if there's no running session (e.g.,
    fresh install before first login).
@@ -58,8 +58,8 @@ won't duplicate the require line.
 
 This removes:
 
-- The binary (`~/.local/bin/jsg-custom-dock` and `/usr/bin/jsg-custom-dock`)
-- The Hyprland snippet (`~/.config/hypr/jsg-custom-dock.lua` or `/etc/hypr/`)
+- The binary (`~/.local/bin/jgdock` and `/usr/bin/jgdock`)
+- The Hyprland snippet (`~/.config/hypr/jgdock.lua` or `/etc/hypr/`)
 - The `require()` line + marker comment in `hyprland.lua`
 - The user config at `~/.config/omarchy/dock.toml` — **prompted** first; if
   you've hand-edited it, answer `n` to keep it
@@ -72,7 +72,7 @@ The script does **not** delete:
   so you can `rm -rf` it if you want
 - The cargo registry cache (`~/.cargo/`) — shared with other Rust projects
 
-## Why `require("hypr.jsg-custom-dock")` works
+## Why `require("hypr.jgdock")` works
 
 Omarchy's bootstrap adds three roots to Lua's `package.path`:
 
@@ -82,27 +82,27 @@ Omarchy's bootstrap adds three roots to Lua's `package.path`:
 $OMARCHY_PATH/?.lua
 ```
 
-So `require("hypr.jsg-custom-dock")` resolves to
-`~/.config/hypr/jsg-custom-dock.lua` — same convention Omarchy uses for its
+So `require("hypr.jgdock")` resolves to
+`~/.config/hypr/jgdock.lua` — same convention Omarchy uses for its
 own modules (`hypr.monitors`, `hypr.bindings`, etc.). No absolute paths, no
 env vars, no symlinks.
 
 For system installs (`/etc/hypr/`) the install prints an absolute
-`require("/etc/hypr/jsg-custom-dock.lua")` because `/etc/hypr` is not on the
+`require("/etc/hypr/jgdock.lua")` because `/etc/hypr` is not on the
 default path.
 
 ## Usage
 
 ```sh
-jsg-custom-dock ls                # list configured docks
-jsg-custom-dock show   <name>     # show dock (spawn if absent)
-jsg-custom-dock hide   <name>     # hide to stash
-jsg-custom-dock toggle <name>     # show/hide based on state
-jsg-custom-dock spawn  <name>     # spawn only, don't touch state
-jsg-custom-dock next   <slot>     # cycle docks in slot
+jgdock ls                # list configured docks
+jgdock show   <name>     # show dock (spawn if absent)
+jgdock hide   <name>     # hide to stash
+jgdock toggle <name>     # show/hide based on state
+jgdock spawn  <name>     # spawn only, don't touch state
+jgdock next   <slot>     # cycle docks in slot
 ```
 
-Default keybindings (defined in `assets/jsg-custom-dock.lua`):
+Default keybindings (defined in `assets/jgdock.lua`):
 
 | Key              | Action         |
 |------------------|----------------|
@@ -123,7 +123,7 @@ omarchy-dock/
 │   └── dock.rs       # state machine (show/hide/toggle/cycle)
 ├── assets/
 │   ├── dock.toml             # default config (3 docks: omp, oterm, telegram)
-│   └── jsg-custom-dock.lua   # window rules + bindings (require("hypr.jsg-custom-dock"))
+│   └── jgdock.lua   # window rules + bindings (require("hypr.jgdock"))
 ├── install.sh        # builds + installs everything
 └── README.md
 ```
@@ -141,7 +141,7 @@ omarchy-dock/
    mutex   = ["telegram"]   # auto-hide telegram when showing btop
    ```
 
-2. Add a window rule to `assets/jsg-custom-dock.lua` (geometry: size + position):
+2. Add a window rule to `assets/jgdock.lua` (geometry: size + position):
 
    ```lua
    o.window({ class = "^Btop$" }, {
@@ -155,7 +155,7 @@ omarchy-dock/
 3. (Optional) add a keybinding in the same file:
 
    ```lua
-   o.bind("SUPER + B", "Toggle btop", "jsg-custom-dock toggle btop")
+   o.bind("SUPER + B", "Toggle btop", "jgdock toggle btop")
    ```
 
 4. Rebuild: `cd ~/Projects/omarchy-dock && ./install.sh` (or `./install.sh update`

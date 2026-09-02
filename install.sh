@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# jsg-custom-dock installer.
+# jgdock installer.
 #
 # Builds from source and installs:
-#   * Binary at $BIN_DIR/jsg-custom-dock (system /usr/bin or user ~/.local/bin)
-#   * Symlink at ~/.local/bin/jsg-custom-dock pointing at the binary
+#   * Binary at $BIN_DIR/jgdock (system /usr/bin or user ~/.local/bin)
+#   * Symlink at ~/.local/bin/jgdock pointing at the binary
 #   * Default config at $CFG_DIR/omarchy/dock.toml (skipped if user already has one)
-#   * Hyprland snippet at $CFG_DIR/hypr/jsg-custom-dock.lua (user) or /etc/hypr/ (system)
+#   * Hyprland snippet at $CFG_DIR/hypr/jgdock.lua (user) or /etc/hypr/ (system)
 #
 # Subcommands:
 #   install (default)  Build + install from local source.
@@ -22,7 +22,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 ASSETS="$REPO_ROOT/assets"
-PKG="jsg-custom-dock"
+PKG="jgdock"
 CMD="${1:-install}"
 
 usage() {
@@ -120,7 +120,7 @@ do_uninstall() {
     # 1. Strip the marker + require line from hyprland.lua (if present).
     local marker="-- $PKG: managed by install.sh; safe to delete if you uninstall."
     if [[ -f "$user_hypr" ]] && grep -F -- "$marker" "$user_hypr" >/dev/null 2>&1; then
-        local tmp="${user_hypr}.jsg-custom-dock.uninst.$$"
+        local tmp="${user_hypr}.jgdock.uninst.$$"
         # awk drops the marker line and the require line that follows it.
         if awk -v m="$marker" '
             $0 == m { skip = 1; next }
@@ -162,9 +162,9 @@ do_uninstall() {
     fi
 
     # 4. Remove the Hyprland snippet.
-    if [[ -f "$HYPR_DIR/jsg-custom-dock.lua" ]]; then
-        rm -f "$HYPR_DIR/jsg-custom-dock.lua"
-        echo "==> Removed $HYPR_DIR/jsg-custom-dock.lua"
+    if [[ -f "$HYPR_DIR/jgdock.lua" ]]; then
+        rm -f "$HYPR_DIR/jgdock.lua"
+        echo "==> Removed $HYPR_DIR/jgdock.lua"
         removed=1
     fi
 
@@ -268,26 +268,26 @@ do_install() {
 
     # 4. Hyprland snippet ---------------------------------------------------
     # Place the snippet where Hyprland's standard require() resolver can find it:
-    #   * Per-user -> ~/.config/hypr/jsg-custom-dock.lua, loaded as `require("hypr.jsg-custom-dock")`
-    #   * System  -> /etc/hypr/jsg-custom-dock.lua, loaded as absolute path
+    #   * Per-user -> ~/.config/hypr/jgdock.lua, loaded as `require("hypr.jgdock")`
+    #   * System  -> /etc/hypr/jgdock.lua, loaded as absolute path
     # Omarchy's bootstrap adds ~/.config/?/?.lua and $OMARCHY_PATH/?.lua to
     # package.path, so per-user installs are picked up automatically.
-    local snippet="$HYPR_DIR/jsg-custom-dock.lua"
+    local snippet="$HYPR_DIR/jgdock.lua"
     echo "==> Installing Hyprland snippet to $snippet"
-    install -Dm0644 "$ASSETS/jsg-custom-dock.lua" "$snippet"
+    install -Dm0644 "$ASSETS/jgdock.lua" "$snippet"
 
     # 5. Wire up Hyprland (best-effort) -------------------------------------
     # Two paths:
-    #   * Per-user: `require("hypr.jsg-custom-dock")` (Omarchy's package.path resolves it)
-    #   * System:   `require("/etc/hypr/jsg-custom-dock")` absolute (no package.path entry)
+    #   * Per-user: `require("hypr.jgdock")` (Omarchy's package.path resolves it)
+    #   * System:   `require("/etc/hypr/jgdock")` absolute (no package.path entry)
     #
     # If hyprland.lua exists and the require isn't already there, append it.
     # Then attempt hyprctl reload if a Hyprland session is reachable.
     local wire_line
     if [[ "$INSTALL_KIND" == "system" ]]; then
-        wire_line='require("/etc/hypr/jsg-custom-dock")'
+        wire_line='require("/etc/hypr/jgdock")'
     else
-        wire_line='require("hypr.jsg-custom-dock")'
+        wire_line='require("hypr.jgdock")'
     fi
 
     local marker="-- $PKG: managed by install.sh; safe to delete if you uninstall."

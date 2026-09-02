@@ -1,4 +1,4 @@
-# jsg-custom-dock configuration.
+# jgdock configuration.
 #
 # Source of truth for runtime dock behaviour. Window rules (float / pin /
 # size / move) are mirrored in ~/.config/hypr/hyprland.lua because Hyprland

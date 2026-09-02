@@ -1,10 +1,10 @@
 [package]
-name = "jsg-custom-dock"
+name = "jgdock"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "jsg-custom-dock"
+name = "jgdock"
 path = "src/main.rs"
 
 [dependencies]
