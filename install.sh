@@ -5,7 +5,9 @@
 #   * Binary at $BIN_DIR/jgdock (system /usr/bin or user ~/.local/bin)
 #   * Symlink at ~/.local/bin/jgdock pointing at the binary
 #   * Default config at $CFG_DIR/jgdock/dock.toml (skipped if user already has one)
-#   * Hyprland snippet at $CFG_DIR/hypr/jgdock.lua (user) or /etc/hypr/ (system)
+#   * Hyprland snippet at $CFG_DIR/jgdock/jgdock.lua (per-user, loaded via
+#     require("jgdock") after a package.path prepend written into
+#     hyprland.lua) or /etc/hypr/jgdock.lua (system, absolute require)
 #
 # Subcommands:
 #   install (default)  Build + install from local source.
@@ -13,11 +15,14 @@
 #                      Use this on devices that already have the repo cloned
 #                      to pick up changes pushed to the remote.
 #   uninstall          Remove the binary, symlink, Hyprland snippet, and
-#                      the require line from hyprland.lua. Prompts before
+#                      the require block from hyprland.lua. Prompts before
 #                      removing the user config. Does NOT delete the source
 #                      directory or cargo registry.
 #
 # Idempotent: re-running is safe. Existing user config is never overwritten.
+# The wire block is detected by its marker comment AND its first-line content,
+# so old single-line `require("hypr.jgdock")` blocks from a prior version
+# are migrated automatically.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -30,13 +35,50 @@ usage() {
 usage: $0 [install|update|uninstall]
   install    Build + install from local source (default).
   update     Fast-forward merge from origin, then build + install.
-  uninstall  Remove binary, symlink, snippet, and require line. Prompts
+  uninstall  Remove binary, symlink, snippet, and require block. Prompts
              before removing the user config; source dir is left alone.
 EOF
     exit 2
 }
 
 [[ "$CMD" == "-h" || "$CMD" == "--help" || "$CMD" == "help" ]] && usage
+
+# ---------------------------------------------------------------------------
+# Strip the marker + the wire block that follows it from hyprland.lua.
+# The wire block is 1 line (system) or 2 lines (per-user), always followed
+# by a blank separator. Drops the marker and everything up to and including
+# the first blank line that follows.
+#
+# Used by both the uninstaller (remove entirely) and the installer (re-append
+# with the current block shape to migrate from an older shape).
+strip_wire_block() {
+    local user_hypr="$1"
+    local marker="$2"
+    local tmp="${user_hypr}.jgdock.strip.$$"
+    if ! awk -v m="$marker" '
+        $0 == m { skip = 1; next }
+        skip == 1 {
+            if ($0 ~ /^[[:space:]]*$/) { skip = 0 }
+            next
+        }
+        { print }
+    ' "$user_hypr" > "$tmp"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    # Trim trailing blanks the removal may have created.
+    local trimmed
+    trimmed=$(awk '
+        { lines[NR] = $0 }
+        END {
+            last = NR
+            while (last > 0 && lines[last] ~ /^[[:space:]]*$/) last--
+            for (i = 1; i <= last; i++) print lines[i]
+        }
+    ' "$tmp")
+    printf '%s\n' "$trimmed" > "$tmp"
+    mv "$tmp" "$user_hypr"
+}
 
 # ---------------------------------------------------------------------------
 # update: pull latest from the configured remote.
@@ -98,7 +140,7 @@ do_update() {
 
 # ---------------------------------------------------------------------------
 # uninstall: remove the binary, symlink, Hyprland snippet, and the require
-# line from hyprland.lua. Asks before touching the user config (which may
+# block from hyprland.lua. Asks before touching the user config (which may
 # contain hand-edited dock specs). Leaves the source directory and cargo
 # registry cache alone — those are not ours to delete.
 do_uninstall() {
@@ -109,7 +151,9 @@ do_uninstall() {
     else
         BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
         CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
-        HYPR_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
+        # Mirror do_install: per-user snippet lives at
+        # ~/.config/jgdock/jgdock.lua, not ~/.config/hypr/jgdock.lua.
+        HYPR_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/jgdock"
     fi
     local user_bin="${XDG_BIN_HOME:-$HOME/.local/bin}"
     local user_cfg="${XDG_CONFIG_HOME:-$HOME/.config}/jgdock/dock.toml"
@@ -117,33 +161,14 @@ do_uninstall() {
 
     local removed=0
 
-    # 1. Strip the marker + require line from hyprland.lua (if present).
+    # 1. Strip the marker + wire block from hyprland.lua (if present).
     local marker="-- $PKG: managed by install.sh; safe to delete if you uninstall."
     if [[ -f "$user_hypr" ]] && grep -F -- "$marker" "$user_hypr" >/dev/null 2>&1; then
-        local tmp="${user_hypr}.jgdock.uninst.$$"
-        # awk drops the marker line and the require line that follows it.
-        if awk -v m="$marker" '
-            $0 == m { skip = 1; next }
-            skip == 1 { skip = 0; next }
-            { print }
-        ' "$user_hypr" > "$tmp"; then
-            # Trim trailing blanks the removal may have created.
-            local trimmed
-            trimmed=$(awk '
-                { lines[NR] = $0 }
-                END {
-                    last = NR
-                    while (last > 0 && lines[last] ~ /^[[:space:]]*$/) last--
-                    for (i = 1; i <= last; i++) print lines[i]
-                }
-            ' "$tmp")
-            printf '%s\n' "$trimmed" > "$tmp"
-            mv "$tmp" "$user_hypr"
-            echo "==> Removed require line from $user_hypr"
+        if strip_wire_block "$user_hypr" "$marker"; then
+            echo "==> Removed require block from $user_hypr"
             removed=1
         else
-            rm -f "$tmp"
-            echo "warning: failed to strip require line from $user_hypr" >&2
+            echo "warning: failed to strip require block from $user_hypr" >&2
         fi
     fi
 
@@ -220,7 +245,13 @@ do_install() {
     else
         BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
         CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
-        HYPR_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
+        # Snippet lives at $CFG_DIR/jgdock/jgdock.lua (co-located with
+        # dock.toml). It's not under hypr/ because Omarchy's Lua loader
+        # only adds $XDG_CONFIG_HOME/?.lua, not arbitrary subdirs. The
+        # installer instead prepends $XDG_CONFIG_HOME/jgdock/?.lua to
+        # package.path at the top of hyprland.lua so `require("jgdock")`
+        # resolves here.
+        HYPR_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/jgdock"
         INSTALL_KIND="user"
     fi
 
@@ -267,51 +298,66 @@ do_install() {
     fi
 
     # 4. Hyprland snippet ---------------------------------------------------
-    # Place the snippet where Hyprland's standard require() resolver can find it:
-    #   * Per-user -> ~/.config/hypr/jgdock.lua, loaded as `require("hypr.jgdock")`
-    #   * System  -> /etc/hypr/jgdock.lua, loaded as absolute path
-    # Omarchy's bootstrap adds ~/.config/?/?.lua and $OMARCHY_PATH/?.lua to
-    # package.path, so per-user installs are picked up automatically.
     local snippet="$HYPR_DIR/jgdock.lua"
     echo "==> Installing Hyprland snippet to $snippet"
     install -Dm0644 "$ASSETS/jgdock.lua" "$snippet"
 
     # 5. Wire up Hyprland (best-effort) -------------------------------------
-    # Two paths:
-    #   * Per-user: `require("hypr.jgdock")` (Omarchy's package.path resolves it)
-    #   * System:   `require("/etc/hypr/jgdock")` absolute (no package.path entry)
-    #
-    # If hyprland.lua exists and the require isn't already there, append it.
-    # Then attempt hyprctl reload if a Hyprland session is reachable.
-    local wire_line
+    # Per-user writes a 2-line block: package.path prepend + require.
+    # System installs use a 1-line absolute require since /etc/hypr isn't
+    # on package.path. The block is wrapped in a marker comment so the
+    # uninstaller can find and remove it as a unit.
+    local wire_block
     if [[ "$INSTALL_KIND" == "system" ]]; then
-        wire_line='require("/etc/hypr/jgdock")'
+        wire_block='require("/etc/hypr/jgdock")'
     else
-        wire_line='require("hypr.jgdock")'
+        wire_block=$'package.path = (os.getenv("HOME") or "") .. "/.config/jgdock/?.lua;" .. package.path\nrequire("jgdock")'
     fi
 
     local marker="-- $PKG: managed by install.sh; safe to delete if you uninstall."
+    local expected_first
+    expected_first=$(printf '%s\n' "$wire_block" | head -n1)
 
     if [[ -f "$user_hypr" ]]; then
-        # Detect by the marker comment, not the require string. Catches any
-        # whitespace variant of the require line, including manual edits.
         if grep -F -- "$marker" "$user_hypr" >/dev/null 2>&1; then
-            echo "==> Hyprland config already wired (marker found)"
-            reload_needed=0
-        else
-            # Append with a marker so future installs can detect and (if needed)
-            # remove the line, and so the user knows where it came from.
-            printf '\n%s\n%s\n' "$marker" "$wire_line" >> "$user_hypr"
+            # Marker present. Check whether the wire block below it matches
+            # what we'd write today. If yes, no-op. If no, migrate: strip
+            # the old block and re-append the new one.
+            local first_wire_line
+            first_wire_line=$(awk -v m="$marker" '
+                $0 == m { found = 1; next }
+                found == 1 && $0 != "" { print; exit }
+            ' "$user_hypr")
+            if [[ "$first_wire_line" == "$expected_first" ]]; then
+                echo "==> Hyprland config already wired (marker + matching block)"
+                reload_needed=0
+            else
+                echo "==> Migrating wire block to current shape"
+                if strip_wire_block "$user_hypr" "$marker"; then
+                    reload_needed=1
+                else
+                    echo "warning: failed to strip old wire block" >&2
+                fi
+            fi
+        fi
+        if [[ "$reload_needed" -eq 1 ]] || ! grep -F -- "$marker" "$user_hypr" >/dev/null 2>&1; then
+            # Append the marker + wire block. The block is N lines; printf
+            # inserts a trailing newline after the last line.
+            {
+                printf '\n%s\n' "$marker"
+                printf '%s\n' "$wire_block"
+            } >> "$user_hypr"
             echo "==> Appended to $user_hypr:"
-            echo "    $wire_line"
+            printf '    %s\n' "$wire_block"
             reload_needed=1
         fi
     else
         echo
         echo "==> No $user_hypr found."
-        echo "    Create one and add this line to load the dock rules:"
+        echo "    Create one and add these lines to load the dock rules:"
         echo
-        echo "    $wire_line"
+        printf '    %s\n' "$wire_block"
+        echo
         reload_needed=0
     fi
 

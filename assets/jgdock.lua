@@ -1,17 +1,24 @@
 -- jgdock: Hyprland integration snippet.
 --
--- Drop this into your Hyprland config by adding ONE line to
+-- Drop this into your Hyprland config by adding two lines to
 -- ~/.config/hypr/hyprland.lua (after the Omarchy requires):
 --
---   require("hypr.jgdock")
+--   local home = os.getenv("HOME")
+--   package.path = home .. "/.config/jgdock/?.lua;" .. package.path
+--   require("jgdock")
+--
+-- The installer wires this up automatically with a marker comment so it
+-- can be undone by ./install.sh uninstall. Manual installation works too
+-- — copy this file to ~/.config/jgdock/jgdock.lua and add the three lines
+-- above.
 --
 -- It registers:
 --   * Window rules for the configured docks (float, pin, geometry)
 --   * Keybindings for SUPER+T (oterm), SUPER+G (omp), SUPER+ALT+E (telegram)
 --
 -- This file is installed by jgdock's installer at:
---   * ~/.config/hypr/jgdock.lua  (per-user)
---   * /etc/hypr/jgdock.lua       (system, requires() requires absolute path)
+--   * ~/.config/jgdock/jgdock.lua  (per-user; the only install location now)
+--   * /etc/hypr/jgdock.lua         (system, requires absolute-path require)
 --
 -- To customize, edit this file after install, or copy it to your own path.
 
