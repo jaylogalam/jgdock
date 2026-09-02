@@ -5,7 +5,7 @@
 #   * Binary at $BIN_DIR/omarchy-dock (system /usr/bin or user ~/.local/bin)
 #   * Symlink at ~/.local/bin/omarchy-dock pointing at the binary
 #   * Default config at $CFG_DIR/omarchy/dock.toml (skipped if user already has one)
-#   * Hyprland snippet at $SHARE_DIR/omarchy-dock/hyprland.lua
+#   * Hyprland snippet at $CFG_DIR/hypr/omarchy-dock.lua (user) or /etc/hypr/ (system)
 #
 # Idempotent: re-running is safe. Existing user config is never overwritten.
 set -euo pipefail
@@ -17,12 +17,12 @@ ASSETS="$REPO_ROOT/assets"
 if [[ $EUID -eq 0 ]]; then
     BIN_DIR="/usr/bin"
     CFG_DIR="/etc"
-    SHARE_DIR="/usr/share"
+    HYPR_DIR="/etc/hypr"
     INSTALL_KIND="system"
 else
     BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
     CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
-    SHARE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
+    HYPR_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
     INSTALL_KIND="user"
 fi
 
@@ -68,14 +68,27 @@ else
 fi
 
 # 4. Hyprland snippet ------------------------------------------------------
-SNIPPET="$SHARE_DIR/omarchy-dock/hyprland.lua"
+# Place the snippet where Hyprland's standard require() resolver can find it:
+#   * Per-user -> ~/.config/hypr/omarchy-dock.lua, loaded as `require("hypr.omarchy-dock")`
+#   * System  -> /etc/hypr/omarchy-dock.lua, loaded as `require("hypr.omarchy-dock")`
+# Omarchy's bootstrap adds ~/.config/?/?.lua and $OMARCHY_PATH/?.lua to
+# package.path, so per-user installs are picked up automatically.
+SNIPPET="$HYPR_DIR/omarchy-dock.lua"
 echo "==> Installing Hyprland snippet to $SNIPPET"
-install -Dm0644 "$ASSETS/hyprland.lua" "$SNIPPET"
+install -Dm0644 "$ASSETS/omarchy-dock.lua" "$SNIPPET"
 
 # 5. Wire up Hyprland (best-effort) ----------------------------------------
-# If the user's hyprland.lua exists, check whether the require() line is
-# already present. If not, print the instruction; do NOT auto-merge.
-WIRE_LINE="require(\"$SNIPPET\")"
+# The require() path differs between install kinds:
+#   * Per-user: `require("hypr.omarchy-dock")` (Omarchy's package.path resolves it)
+#   * System:   `require("hypr.omarchy-dock")` works only if /etc/hypr is on the
+#               path. On stock Omarchy it isn't, so we fall back to an absolute
+#               require() for system installs.
+if [[ "$INSTALL_KIND" == "system" ]]; then
+    WIRE_LINE="require(\"$SNIPPET\")"
+else
+    WIRE_LINE='require("hypr.omarchy-dock")'
+fi
+
 if [[ -f "$USER_HYPR" ]]; then
     if grep -F "$WIRE_LINE" "$USER_HYPR" >/dev/null 2>&1; then
         echo "==> Hyprland config already wired"

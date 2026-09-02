@@ -1,20 +1,23 @@
 -- omarchy-dock: Hyprland integration snippet.
 --
 -- Drop this into your Hyprland config by adding ONE line to
--- ~/.config/hypr/hyprland.lua (after the Omarchy defaults are loaded):
+-- ~/.config/hypr/hyprland.lua (after the Omarchy requires):
 --
---   require("/usr/share/omarchy-dock/hyprland")
+--   require("hypr.omarchy-dock")
 --
 -- It registers:
 --   * Window rules for the configured docks (float, pin, geometry)
 --   * Keybindings for SUPER+T (oterm), SUPER+G (omp), SUPER+ALT+E (telegram)
 --
--- To customize, copy this file to ~/.config/hypr/omarchy-dock.lua and
--- require that path instead.
+-- This file is installed by omarchy-dock's installer at:
+--   * ~/.config/hypr/omarchy-dock.lua  (per-user)
+--   * /etc/hypr/omarchy-dock.lua       (system, requires() requires absolute path)
+--
+-- To customize, edit this file after install, or copy it to your own path.
 
 -- Window rules ------------------------------------------------------------
 -- Runtime behaviour (spawn, show/hide, mutex) lives in `omarchy-dock`,
--- configured in /etc/omarchy/dock.toml. This block is geometry only.
+-- configured in ~/.config/omarchy/dock.toml. This block is geometry only.
 
 o.window({ class = "^Omp$" }, {
     float = true,

@@ -4,9 +4,9 @@ Config-driven dock manager for Hyprland on Omarchy (or any Arch/Hyprland box).
 
 Each dockable app (omp, oterm, telegram, ...) is one `[docks.<name>]` block in
 `assets/dock.toml`. The Rust binary at `src/` handles spawn, show/hide, stash,
-mutex between siblings. A Lua snippet at `assets/hyprland.lua` registers the
-window rules (float, pin, geometry) and keybindings; load it from your Hyprland
-config with one `require()` line.
+mutex between siblings. A Lua snippet at `assets/omarchy-dock.lua` registers
+the window rules (float, pin, geometry) and keybindings; load it from your
+Hyprland config with one `require()` line.
 
 ## Install (current machine)
 
@@ -18,10 +18,12 @@ cd ~/Projects/omarchy-dock
 Then add to `~/.config/hypr/hyprland.lua` (after the Omarchy requires):
 
 ```lua
-require((os.getenv("HOME") or "") .. "/.local/share/omarchy-dock/hyprland")
+require("hypr.omarchy-dock")
 ```
 
-…and run `hyprctl reload`.
+… and run `hyprctl reload`.
+
+(The installer prints this line for you and detects it on subsequent runs.)
 
 ## Install (fresh machine)
 
@@ -39,11 +41,31 @@ The script:
 3. Installs the packaged config to `/etc/omarchy/dock.toml` (system) or
    `~/.config/omarchy/dock.toml` (user); seeds the user location only if
    absent — your edits are preserved on re-install.
-4. Installs the Hyprland snippet at `/usr/share/omarchy-dock/hyprland.lua`
-   (system) or `~/.local/share/omarchy-dock/hyprland.lua` (user).
-5. Prints the `require()` line you need to add.
+4. Installs the Hyprland snippet to `/etc/hypr/omarchy-dock.lua` (system) or
+   `~/.config/hypr/omarchy-dock.lua` (user).
+5. Prints the `require()` line you need to add (system) or detects an
+   already-present line (per-user, since `~/.config/hypr/` is on Omarchy's
+   `package.path` by default).
 
 Idempotent — re-run any time.
+
+## Why `require("hypr.omarchy-dock")` works
+
+Omarchy's bootstrap adds three roots to Lua's `package.path`:
+
+```lua
+~/.local/state/?.lua
+~/.config/?.lua
+$OMARCHY_PATH/?.lua
+```
+
+So `require("hypr.omarchy-dock")` resolves to `~/.config/hypr/omarchy-dock.lua`
+— same convention Omarchy uses for its own modules (`hypr.monitors`,
+`hypr.bindings`, etc.). No absolute paths, no env vars, no symlinks.
+
+For system installs (`/etc/hypr/`) the install prints an absolute
+`require("/etc/hypr/omarchy-dock.lua")` because `/etc/hypr` is not on the
+default path.
 
 ## Usage
 
@@ -56,13 +78,13 @@ omarchy-dock spawn  <name>     # spawn only, don't touch state
 omarchy-dock next   <slot>     # cycle docks in slot
 ```
 
-Default keybindings (defined in `assets/hyprland.lua`):
+Default keybindings (defined in `assets/omarchy-dock.lua`):
 
-| Key           | Action              |
-|---------------|---------------------|
-| `SUPER + T`   | Toggle oterm        |
-| `SUPER + G`   | Toggle omp          |
-| `SUPER + ALT + E` | Toggle telegram |
+| Key              | Action         |
+|------------------|----------------|
+| `SUPER + T`      | Toggle oterm   |
+| `SUPER + G`      | Toggle omp     |
+| `SUPER + ALT + E`| Toggle telegram |
 
 ## Layout
 
@@ -76,8 +98,8 @@ omarchy-dock/
 │   ├── hypr.rs       # hyprctl IPC wrapper
 │   └── dock.rs       # state machine (show/hide/toggle/cycle)
 ├── assets/
-│   ├── dock.toml     # default config (3 docks: omp, oterm, telegram)
-│   └── hyprland.lua  # window rules + bindings (require() this)
+│   ├── dock.toml         # default config (3 docks: omp, oterm, telegram)
+│   └── omarchy-dock.lua  # window rules + bindings (require("hypr.omarchy-dock"))
 ├── install.sh        # builds + installs everything
 └── README.md
 ```
@@ -95,7 +117,7 @@ omarchy-dock/
    mutex   = ["telegram"]   # auto-hide telegram when showing btop
    ```
 
-2. Add a window rule to `assets/hyprland.lua` (geometry: size + position):
+2. Add a window rule to `assets/omarchy-dock.lua` (geometry: size + position):
 
    ```lua
    o.window({ class = "^Btop$" }, {
@@ -112,9 +134,8 @@ omarchy-dock/
    o.bind("SUPER + B", "Toggle btop", "omarchy-dock toggle btop")
    ```
 
-4. Rebuild: `cd ~/Projects/omarchy-dock && ./install.sh`. Re-run, no
-   reinstall of the snippet needed (the cargo build overwrites only the
-   binary; assets are copied fresh).
+4. Rebuild: `cd ~/Projects/omarchy-dock && ./install.sh`. The cargo build
+   overwrites only the binary; assets are copied fresh on every install.
 
 ## Why Rust
 
@@ -130,4 +151,4 @@ optimization could talk the Hyprland IPC socket directly.
 
 Source lives only in `~/Projects/omarchy-dock/`. The runtime files (binary,
 config, snippet) are installed under `~/.local/` and `~/.config/` and are
-ignored by this repo's gitignore.
+excluded by this repo's gitignore.
