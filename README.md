@@ -32,21 +32,21 @@ diverged (resolve manually with `git pull --rebase` first).
 The installer:
 
 1. Builds the binary with `cargo build --release`.
-2. Installs to `/usr/bin/jgdock` (system, root) or
-   `~/.local/bin/jgdock` (user); always also creates the symlink at
-   `~/.local/bin/jgdock`.
-3. Installs the packaged config to `/etc/jgdock/dock.toml` (system) or
-   `~/.config/jgdock/dock.toml` (user); seeds the user location only if
-   absent — your edits are preserved on re-install.
-4. Installs the Hyprland snippet at `/etc/hypr/jgdock.lua` (system) or
-   `~/.config/jgdock/jgdock.lua` (per-user; co-located with `dock.toml`).
+2. Installs the binary to `~/.local/bin/jgdock`.
+3. Installs the packaged config to `~/.config/jgdock/dock.toml`; seeds the
+   user location only if absent — your edits are preserved on re-install.
+4. Installs the Hyprland snippet at `~/.config/jgdock/jgdock.lua` (co-located
+   with `dock.toml`). The loader requires `jgdock-rules.lua` (window rules)
+   and `jgdock-bindings.lua` (keybindings); all three land together.
 5. If `~/.config/hypr/hyprland.lua` exists, appends a marker + wire block:
-   per-user writes a 2-line `package.path` prepend + `require("jgdock")`,
-   system writes a 1-line `require("/etc/hypr/jgdock")`. Migrates older
+   a 2-line `package.path` prepend + `require("jgdock")`. Migrates older
    `require("hypr.jgdock")` blocks from a previous install automatically.
 6. If a Hyprland session is reachable, runs `hyprctl reload` and verifies
    `configerrors` is clean. Skipped if there's no running session (e.g.,
-  fresh install before first login).
+   fresh install before first login).
+
+User-only: refuses to run as root. There's no system install mode; copy
+the repo to a user-owned path and run `./install.sh` there.
 
 Idempotent — re-run any time. Re-running detects the marker + first wire
 line and won't duplicate the wire block.
@@ -59,12 +59,12 @@ line and won't duplicate the wire block.
 
 This removes:
 
-- The binary (`~/.local/bin/jgdock` and `/usr/bin/jgdock`)
-- The Hyprland snippet (`~/.config/jgdock/jgdock.lua` or `/etc/hypr/`)
+- The binary (`~/.local/bin/jgdock`)
+- The Hyprland snippet (`~/.config/jgdock/jgdock.lua`,
+  `jgdock-rules.lua`, `jgdock-bindings.lua`)
 - The wire block + marker comment in `hyprland.lua` (the 2-line
-  `package.path` prepend + `require("jgdock")` for per-user installs)
+  `package.path` prepend + `require("jgdock")`)
 - The user config at `~/.config/jgdock/dock.toml` — **prompted** first; if
-  you've hand-edited it, answer `n` to keep it
 
 Then runs `hyprctl reload` and verifies `configerrors` is clean.
 
@@ -98,10 +98,6 @@ After the prepend, `require("jgdock")` resolves to
 `dock.toml`). The prepend is safe to repeat — each install re-detects
 the existing block by its marker comment and skips the append.
 
-For system installs (`/etc/hypr/`) the installer writes a 1-line
-`require("/etc/hypr/jgdock")` instead, because `/etc/hypr` is not on
-`package.path` and shouldn't be.
-
 ## Usage
 
 ```sh
@@ -134,7 +130,9 @@ jgdock/
 │   └── dock.rs       # state machine (show/hide/toggle/cycle)
 ├── assets/
 │   ├── dock.toml             # default config (3 docks: omp, oterm, telegram)
-│   └── jgdock.lua   # window rules + bindings (loaded as require("jgdock"))
+│   ├── jgdock.lua            # top-level loader: requires rules + bindings
+│   ├── jgdock-rules.lua      # window rules (float, pin, geometry)
+│   └── jgdock-bindings.lua   # keybindings
 ├── install.sh        # builds + installs everything
 └── README.md
 ```
@@ -152,7 +150,7 @@ jgdock/
    mutex   = ["telegram"]   # auto-hide telegram when showing btop
    ```
 
-2. Add a window rule to `assets/jgdock.lua` (geometry: size + position):
+2. Add a window rule to `assets/jgdock-rules.lua` (geometry: size + position):
 
    ```lua
    o.window({ class = "^Btop$" }, {
@@ -163,7 +161,7 @@ jgdock/
    })
    ```
 
-3. (Optional) add a keybinding in the same file:
+3. (Optional) add a keybinding in `assets/jgdock-bindings.lua`:
 
    ```lua
    o.bind("SUPER + B", "Toggle btop", "jgdock toggle btop")

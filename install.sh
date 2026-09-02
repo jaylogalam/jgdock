@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-# jgdock installer.
+# jgdock installer (user-only).
 #
 # Builds from source and installs:
-#   * Binary at $BIN_DIR/jgdock (system /usr/bin or user ~/.local/bin)
-#   * Symlink at ~/.local/bin/jgdock pointing at the binary
-#   * Default config at $CFG_DIR/jgdock/dock.toml (skipped if user already has one)
-#   * Hyprland snippet at $CFG_DIR/jgdock/jgdock.lua (per-user, loaded via
-#     require("jgdock") after a package.path prepend written into
-#     hyprland.lua) or /etc/hypr/jgdock.lua (system, absolute require)
+#   - Binary at ~/.local/bin/jgdock
+#   - Default config at ~/.config/jgdock/dock.toml (skipped if user has one)
+#   - Hyprland snippet at ~/.config/jgdock/jgdock.lua (+ windowrules.lua,
+#     bindings.lua side files), loaded via require("jgdock") after a
+#     package.path prepend written into hyprland.lua
+#
+# Refuses to run as root: there's no system install mode. Running as root
+# would write to /usr/bin /etc and produce a config the same user couldn't
+# uninstall cleanly. Run as the user who will own the binary.
 #
 # Subcommands:
 #   install (default)  Build + install from local source.
@@ -20,9 +23,9 @@
 #                      directory or cargo registry.
 #
 # Idempotent: re-running is safe. Existing user config is never overwritten.
-# The wire block is detected by its marker comment AND its first-line content,
-# so old single-line `require("hypr.jgdock")` blocks from a prior version
-# are migrated automatically.
+# The wire block is detected by its marker comment, so old single-line
+# `require("hypr.jgdock")` blocks from a prior version are migrated
+# automatically.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
@@ -30,24 +33,41 @@ ASSETS="$REPO_ROOT/assets"
 PKG="jgdock"
 CMD="${1:-install}"
 
+BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
+CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
+HYPR_DIR="$CFG_DIR/jgdock"
+USER_CFG="$CFG_DIR/jgdock/dock.toml"
+USER_HYPR="$CFG_DIR/hypr/hyprland.lua"
+SNIPPET="$HYPR_DIR/jgdock.lua"
+SNIPPET_RULES="$HYPR_DIR/windowrules.lua"
+SNIPPET_BINDINGS="$HYPR_DIR/bindings.lua"
+
 usage() {
     cat <<EOF
 usage: $0 [install|update|uninstall]
   install    Build + install from local source (default).
   update     Fast-forward merge from origin, then build + install.
-  uninstall  Remove binary, symlink, snippet, and require block. Prompts
+  uninstall  Remove binary, snippet files, and require block. Prompts
              before removing the user config; source dir is left alone.
+
+User-only install. Refuses to run as root.
 EOF
     exit 2
 }
 
 [[ "$CMD" == "-h" || "$CMD" == "--help" || "$CMD" == "help" ]] && usage
 
+if [[ $EUID -eq 0 ]]; then
+    echo "error: refusing to run as root. jgdock has no system install mode." >&2
+    echo "       Run as the user who will own the binary." >&2
+    exit 1
+fi
+
 # ---------------------------------------------------------------------------
 # Strip the marker + the wire block that follows it from hyprland.lua.
-# The wire block is 1 line (system) or 2 lines (per-user), always followed
-# by a blank separator. Drops the marker and everything up to and including
-# the first blank line that follows.
+# The wire block is one or more lines, always terminated by a blank line.
+# Drops the marker and everything up to and including the first blank line
+# that follows.
 #
 # Used by both the uninstaller (remove entirely) and the installer (re-append
 # with the current block shape to migrate from an older shape).
@@ -84,10 +104,6 @@ strip_wire_block() {
 # update: pull latest from the configured remote.
 # Refuses if there are local uncommitted changes or a non-fast-forward state.
 do_update() {
-    if ! command -v git >/dev/null 2>&1; then
-        echo "error: git not found; cannot update." >&2
-        exit 1
-    fi
     if [[ ! -d "$REPO_ROOT/.git" ]]; then
         echo "error: $REPO_ROOT is not a git checkout; nothing to update." >&2
         exit 1
@@ -139,78 +155,37 @@ do_update() {
 }
 
 # ---------------------------------------------------------------------------
-# uninstall: remove the binary, symlink, Hyprland snippet, and the require
+# uninstall: remove the binary and the require
 # block from hyprland.lua. Asks before touching the user config (which may
 # contain hand-edited dock specs). Leaves the source directory and cargo
 # registry cache alone — those are not ours to delete.
 do_uninstall() {
-    if [[ $EUID -eq 0 ]]; then
-        BIN_DIR="/usr/bin"
-        CFG_DIR="/etc"
-        HYPR_DIR="/etc/hypr"
-    else
-        BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
-        CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
-        # Mirror do_install: per-user snippet lives at
-        # ~/.config/jgdock/jgdock.lua, not ~/.config/hypr/jgdock.lua.
-        HYPR_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/jgdock"
-    fi
-    local user_bin="${XDG_BIN_HOME:-$HOME/.local/bin}"
-    local user_cfg="${XDG_CONFIG_HOME:-$HOME/.config}/jgdock/dock.toml"
-    local user_hypr="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprland.lua"
-
     local removed=0
 
     # 1. Strip the marker + wire block from hyprland.lua (if present).
     local marker="-- $PKG: managed by install.sh; safe to delete if you uninstall."
-    if [[ -f "$user_hypr" ]] && grep -F -- "$marker" "$user_hypr" >/dev/null 2>&1; then
-        if strip_wire_block "$user_hypr" "$marker"; then
-            echo "==> Removed require block from $user_hypr"
+    if [[ -f "$USER_HYPR" ]] && grep -F -- "$marker" "$USER_HYPR" >/dev/null 2>&1; then
+        if strip_wire_block "$USER_HYPR" "$marker"; then
+            echo "==> Removed require block from $USER_HYPR"
             removed=1
         else
-            echo "warning: failed to strip require block from $user_hypr" >&2
+            echo "warning: failed to strip require block from $USER_HYPR" >&2
         fi
     fi
 
-    # 2. Remove the binary (system path).
-    if [[ -e "$BIN_DIR/$PKG" ]]; then
+    # 2. Remove the binary and any symlink at the user bin dir.
+    if [[ -e "$BIN_DIR/$PKG" && ! -L "$BIN_DIR/$PKG" ]]; then
         rm -f "$BIN_DIR/$PKG"
         echo "==> Removed $BIN_DIR/$PKG"
         removed=1
     fi
-
-    # 3. Remove the symlink (user path), if it's a symlink.
-    if [[ -L "$user_bin/$PKG" ]]; then
-        rm -f "$user_bin/$PKG"
-        echo "==> Removed symlink $user_bin/$PKG"
+    if [[ -L "$BIN_DIR/$PKG" ]]; then
+        rm -f "$BIN_DIR/$PKG"
+        echo "==> Removed symlink $BIN_DIR/$PKG"
         removed=1
     fi
 
-    # 4. Remove the Hyprland snippet.
-    # if [[ -f "$HYPR_DIR/jgdock.lua" ]]; then
-    #     rm -f "$HYPR_DIR/jgdock.lua"
-    #     echo "==> Removed $HYPR_DIR/jgdock.lua"
-    #     removed=1
-    # fi
-
-    # 5. Optionally remove the user config. Default config (installed but
-    # never edited) is safe to remove without prompting; for safety we
-    # always prompt — the user may have hand-edited it.
-    # if [[ -f "$user_cfg" ]]; then
-    #     echo
-    #     printf "Remove user config at %s? [y/N] " "$user_cfg"
-    #     local ans
-    #     read -r ans
-    #     if [[ "$ans" =~ ^[Yy]$ ]]; then
-    #         rm -f "$user_cfg"
-    #         echo "==> Removed $user_cfg"
-    #         removed=1
-    #     else
-    #         echo "==> Keeping $user_cfg"
-    #     fi
-    # fi
-
-    # 6. Reload Hyprland if it's reachable.
+    # 4. Reload Hyprland if it's reachable.
     if command -v hyprctl >/dev/null 2>&1; then
         if hyprctl reload >/dev/null 2>&1; then
             echo "==> Hyprland reloaded"
@@ -236,28 +211,6 @@ do_uninstall() {
 # ---------------------------------------------------------------------------
 # install: build + drop files into the right places.
 do_install() {
-    # Resolve install paths: system-wide if root, per-user otherwise.
-    if [[ $EUID -eq 0 ]]; then
-        BIN_DIR="/usr/bin"
-        CFG_DIR="/etc"
-        HYPR_DIR="/etc/hypr"
-        INSTALL_KIND="system"
-    else
-        BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
-        CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
-        # Snippet lives at $CFG_DIR/jgdock/jgdock.lua (co-located with
-        # dock.toml). It's not under hypr/ because Omarchy's Lua loader
-        # only adds $XDG_CONFIG_HOME/?.lua, not arbitrary subdirs. The
-        # installer instead prepends $XDG_CONFIG_HOME/jgdock/?.lua to
-        # package.path at the top of hyprland.lua so `require("jgdock")`
-        # resolves here.
-        HYPR_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/jgdock"
-        INSTALL_KIND="user"
-    fi
-
-    local user_bin="${XDG_BIN_HOME:-$HOME/.local/bin}"
-    local user_cfg="${XDG_CONFIG_HOME:-$HOME/.config}/jgdock/dock.toml"
-    local user_hypr="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprland.lua"
     local reload_needed=0
 
     # 1. Build ---------------------------------------------------------------
@@ -271,55 +224,42 @@ do_install() {
     (cd "$REPO_ROOT" && cargo build --release)
 
     # 2. Install binary ------------------------------------------------------
-    local bin_target="$BIN_DIR/$PKG"
-    echo "==> Installing binary to $bin_target"
-    install -Dm0755 "$REPO_ROOT/target/release/$PKG" "$bin_target"
-
-    # Symlink for ~/.local/bin so both paths work.
-    mkdir -p "$user_bin"
-    if [[ ! -e "$user_bin/$PKG" ]]; then
-        echo "==> Symlinking $user_bin/$PKG -> $bin_target"
-        ln -s "$bin_target" "$user_bin/$PKG"
-    fi
+    mkdir -p "$BIN_DIR"
+    echo "==> Installing binary to $BIN_DIR/$PKG"
+    install -Dm0755 "$REPO_ROOT/target/release/$PKG" "$BIN_DIR/$PKG"
 
     # 3. Default config -----------------------------------------------------
-    # Install a default at the system location (or per-user), and seed the
-    # user's config dir only if absent. User edits win on re-install.
-    local system_cfg="$CFG_DIR/jgdock/dock.toml"
-    echo "==> Installing default config to $system_cfg"
-    install -Dm0644 "$ASSETS/dock.toml" "$system_cfg"
-
-    if [[ ! -e "$user_cfg" ]]; then
-        echo "==> Seeding user config at $user_cfg"
-        mkdir -p "$(dirname "$user_cfg")"
-        install -Dm0644 "$ASSETS/dock.toml" "$user_cfg"
+    # Seed the user's config dir only if absent. User edits win on re-install.
+    if [[ ! -e "$USER_CFG" ]]; then
+        echo "==> Seeding user config at $USER_CFG"
+        mkdir -p "$(dirname "$USER_CFG")"
+        install -Dm0644 "$ASSETS/dock.toml" "$USER_CFG"
     else
-        echo "==> User config already exists; leaving $user_cfg alone"
+        echo "==> User config already exists; leaving $USER_CFG alone"
     fi
 
     # 4. Hyprland snippet ---------------------------------------------------
-    local snippet="$HYPR_DIR/jgdock.lua"
-    echo "==> Installing Hyprland snippet to $snippet"
-    install -Dm0644 "$ASSETS/jgdock.lua" "$snippet"
+    # jgdock.lua requires windowrules.lua and bindings.lua, so all
+    # three must land together.
+    mkdir -p "$HYPR_DIR"
+    echo "==> Installing snippet to $SNIPPET"
+    install -Dm0644 "$ASSETS/jgdock.lua" "$SNIPPET"
+    echo "==> Installing rules to $SNIPPET_RULES"
+    install -Dm0644 "$ASSETS/windowrules.lua" "$SNIPPET_RULES"
+    echo "==> Installing bindings to $SNIPPET_BINDINGS"
+    install -Dm0644 "$ASSETS/bindings.lua" "$SNIPPET_BINDINGS"
 
     # 5. Wire up Hyprland (best-effort) -------------------------------------
-    # Per-user writes a 2-line block: package.path prepend + require.
-    # System installs use a 1-line absolute require since /etc/hypr isn't
-    # on package.path. The block is wrapped in a marker comment so the
-    # uninstaller can find and remove it as a unit.
-    local wire_block
-    if [[ "$INSTALL_KIND" == "system" ]]; then
-        wire_block='require("/etc/hypr/jgdock")'
-    else
-        wire_block=$'package.path = (os.getenv("HOME") or "") .. "/.config/jgdock/?.lua;" .. package.path\nrequire("jgdock")'
-    fi
-
+    # Per-user only: prepend $XDG_CONFIG_HOME/jgdock/?.lua to package.path
+    # and require("jgdock"). The block is wrapped in a marker comment so
+    # the uninstaller can find and remove it as a unit.
+    local wire_block=$'package.path = (os.getenv("HOME") or "") .. "/.config/jgdock/?.lua;" .. package.path\nrequire("jgdock")'
     local marker="-- $PKG: managed by install.sh; safe to delete if you uninstall."
     local expected_first
     expected_first=$(printf '%s\n' "$wire_block" | head -n1)
 
-    if [[ -f "$user_hypr" ]]; then
-        if grep -F -- "$marker" "$user_hypr" >/dev/null 2>&1; then
+    if [[ -f "$USER_HYPR" ]]; then
+        if grep -F -- "$marker" "$USER_HYPR" >/dev/null 2>&1; then
             # Marker present. Check whether the wire block below it matches
             # what we'd write today. If yes, no-op. If no, migrate: strip
             # the old block and re-append the new one.
@@ -327,33 +267,33 @@ do_install() {
             first_wire_line=$(awk -v m="$marker" '
                 $0 == m { found = 1; next }
                 found == 1 && $0 != "" { print; exit }
-            ' "$user_hypr")
+            ' "$USER_HYPR")
             if [[ "$first_wire_line" == "$expected_first" ]]; then
                 echo "==> Hyprland config already wired (marker + matching block)"
                 reload_needed=0
             else
                 echo "==> Migrating wire block to current shape"
-                if strip_wire_block "$user_hypr" "$marker"; then
+                if strip_wire_block "$USER_HYPR" "$marker"; then
                     reload_needed=1
                 else
                     echo "warning: failed to strip old wire block" >&2
                 fi
             fi
         fi
-        if [[ "$reload_needed" -eq 1 ]] || ! grep -F -- "$marker" "$user_hypr" >/dev/null 2>&1; then
+        if [[ "$reload_needed" -eq 1 ]] || ! grep -F -- "$marker" "$USER_HYPR" >/dev/null 2>&1; then
             # Append the marker + wire block. The block is N lines; printf
             # inserts a trailing newline after the last line.
             {
                 printf '\n%s\n' "$marker"
                 printf '%s\n' "$wire_block"
-            } >> "$user_hypr"
-            echo "==> Appended to $user_hypr:"
+            } >> "$USER_HYPR"
+            echo "==> Appended to $USER_HYPR:"
             printf '    %s\n' "$wire_block"
             reload_needed=1
         fi
     else
         echo
-        echo "==> No $user_hypr found."
+        echo "==> No $USER_HYPR found."
         echo "    Create one and add these lines to load the dock rules:"
         echo
         printf '    %s\n' "$wire_block"
@@ -380,7 +320,7 @@ do_install() {
     fi
 
     echo
-    echo "==> Done ($INSTALL_KIND install)."
+    echo "==> Done (user install)."
     echo "    Test: $PKG ls"
 }
 
