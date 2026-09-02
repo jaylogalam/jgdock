@@ -11,9 +11,23 @@ Hyprland config with one `require()` line.
 ## Install
 
 ```sh
+git clone https://github.com/jaylogalam/omarchy-custom-docks.git ~/Projects/omarchy-dock
 cd ~/Projects/omarchy-dock
-./install.sh
+./install.sh            # or: ./install.sh install
 ```
+
+## Update (other devices)
+
+On a machine that already has the repo cloned:
+
+```sh
+cd ~/Projects/omarchy-dock
+./install.sh update
+```
+
+This fetches from `origin`, fast-forward merges, and rebuilds + reinstalls.
+Refuses to run if there are local uncommitted changes or if the branch has
+diverged (resolve manually with `git pull --rebase` first).
 
 The installer:
 
@@ -137,8 +151,9 @@ omarchy-dock/
    o.bind("SUPER + B", "Toggle btop", "jsg-custom-dock toggle btop")
    ```
 
-4. Rebuild: `cd ~/Projects/omarchy-dock && ./install.sh`. The cargo build
-   overwrites only the binary; assets are copied fresh on every install.
+4. Rebuild: `cd ~/Projects/omarchy-dock && ./install.sh` (or `./install.sh update`
+   if you changed things on another machine and want to pull them). The cargo
+   build overwrites only the binary; assets are copied fresh on every install.
 
 ## Why Rust
 
