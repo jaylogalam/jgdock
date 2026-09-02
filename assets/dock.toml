@@ -1,4 +1,4 @@
-# omarchy-dock configuration.
+# jsg-custom-dock configuration.
 #
 # Source of truth for runtime dock behaviour. Window rules (float / pin /
 # size / move) are mirrored in ~/.config/hypr/hyprland.lua because Hyprland

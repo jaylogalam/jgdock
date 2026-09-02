@@ -1,22 +1,22 @@
--- omarchy-dock: Hyprland integration snippet.
+-- jsg-custom-dock: Hyprland integration snippet.
 --
 -- Drop this into your Hyprland config by adding ONE line to
 -- ~/.config/hypr/hyprland.lua (after the Omarchy requires):
 --
---   require("hypr.omarchy-dock")
+--   require("hypr.jsg-custom-dock")
 --
 -- It registers:
 --   * Window rules for the configured docks (float, pin, geometry)
 --   * Keybindings for SUPER+T (oterm), SUPER+G (omp), SUPER+ALT+E (telegram)
 --
--- This file is installed by omarchy-dock's installer at:
---   * ~/.config/hypr/omarchy-dock.lua  (per-user)
---   * /etc/hypr/omarchy-dock.lua       (system, requires() requires absolute path)
+-- This file is installed by jsg-custom-dock's installer at:
+--   * ~/.config/hypr/jsg-custom-dock.lua  (per-user)
+--   * /etc/hypr/jsg-custom-dock.lua       (system, requires() requires absolute path)
 --
 -- To customize, edit this file after install, or copy it to your own path.
 
 -- Window rules ------------------------------------------------------------
--- Runtime behaviour (spawn, show/hide, mutex) lives in `omarchy-dock`,
+-- Runtime behaviour (spawn, show/hide, mutex) lives in `jsg-custom-dock`,
 -- configured in ~/.config/omarchy/dock.toml. This block is geometry only.
 
 o.window({ class = "^Omp$" }, {
@@ -46,6 +46,6 @@ o.window({ class = "^org\\.telegram\\.desktop$" }, {
 
 -- Keybindings -------------------------------------------------------------
 
-o.bind("SUPER + T",       "Toggle oterm",   "omarchy-dock toggle oterm")
-o.bind("SUPER + G",       "Toggle omp",     "omarchy-dock toggle omp")
-o.bind("SUPER + ALT + E", "Toggle telegram", "omarchy-dock toggle telegram")
+o.bind("SUPER + T",       "Toggle oterm",   "jsg-custom-dock toggle oterm")
+o.bind("SUPER + G",       "Toggle omp",     "jsg-custom-dock toggle omp")
+o.bind("SUPER + ALT + E", "Toggle telegram", "jsg-custom-dock toggle telegram")

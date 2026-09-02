@@ -1,10 +1,10 @@
 [package]
-name = "omarchy-dock"
+name = "jsg-custom-dock"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "omarchy-dock"
+name = "jsg-custom-dock"
 path = "src/main.rs"
 
 [dependencies]

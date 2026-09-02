@@ -5,7 +5,7 @@ mod hypr;
 use anyhow::{bail, Result};
 use clap::{Parser as ClapParser, Subcommand};
 
-const DEFAULT_CONFIG_ENV: &str = "OMARCHY_DOCK_CONFIG";
+const DEFAULT_CONFIG_ENV: &str = "JSG_CUSTOM_DOCK_CONFIG";
 
 #[derive(ClapParser, Debug)]
 #[command(version, about = "Config-driven dock manager for Hyprland")]
@@ -77,7 +77,7 @@ fn main() {
     // runtime error (config not found, hyprctl failed, unknown dock, etc.).
     if let Err(e) = run() {
         let msg = e.chain().map(|c| c.to_string()).collect::<Vec<_>>().join(": ");
-        eprintln!("omarchy-dock: {}", msg);
+        eprintln!("jsg-custom-dock: {}", msg);
         std::process::exit(1);
     }
 }
